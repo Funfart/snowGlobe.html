@@ -606,14 +606,14 @@ function animate() {
 // -----------------------------
 // Small helpers & init call
 // -----------------------------
-function ensureStateArrays() {
-  if (!state.velocities) {
-    state.velocities = new Float32Array(particleSystem.geometry.getAttribute('aVelocity').array);
-    // copy initial velocities into state
-    const vAttr = particleSystem.geometry.getAttribute('aVelocity');
-    vAttr.array.forEach((v,i)=> state.velocities[i] = vAttr.array[i]);
-  }
-}
+//function ensureStateArrays() {
+ // if (!state.velocities) {
+   // state.velocities = new Float32Array(particleSystem.geometry.getAttribute('aVelocity').array);
+   // // copy initial velocities into state
+  //  const vAttr = particleSystem.geometry.getAttribute('aVelocity');
+  //  vAttr.array.forEach((v,i)=> state.velocities[i] = vAttr.array[i]);
+//  }
+//}
 
 // setup swipe+shake initializations
 function setupSwipeAndShake() {
