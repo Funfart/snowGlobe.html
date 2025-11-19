@@ -1,0 +1,228 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1.0,viewport-fit=cover"/>
+<title>Snow Globe Viewer</title>
+<style>
+  :root{
+    --bg:#0b1220;
+    --ui-bg: rgba(255,255,255,0.06);
+    --accent: #9ad4ff;
+  }
+  html,body{height:100%;margin:0;background:var(--bg);color:#fff;font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial;}
+  .container{display:flex;flex-direction:column;height:100vh;align-items:center;justify-content:center;padding:8px;box-sizing:border-box;}
+  .globe-wrap{width:100%;max-width:900px;aspect-ratio:3/2;position:relative;border-radius:18px;overflow:hidden;box-shadow:0 10px 30px rgba(0,0,0,0.6), inset 0 1px 0 rgba(255,255,255,0.02);}
+  canvas{width:100%;height:100%;display:block;touch-action:none}
+  .ui{
+    position:absolute;left:8px;top:8px;display:flex;gap:8px;align-items:center;backdrop-filter: blur(6px);
+  }
+  .btn{
+    background:var(--ui-bg);border:1px solid rgba(255,255,255,0.06);padding:6px 10px;border-radius:10px;color:#fff;font-size:14px;
+  }
+  .info{
+    position:absolute;right:8px;bottom:8px;background:linear-gradient(180deg, rgba(0,0,0,0.3), rgba(255,255,255,0.02));
+    padding:6px 10px;border-radius:10px;font-size:13px;color:#dfefff;opacity:0.9;
+  }
+  .slider{width:110px}
+  @media (max-width:480px){
+    .globe-wrap{border-radius:14px}
+    .btn{padding:6px 8px;font-size:13px}
+  }
+</style>
+</head>
+<body>
+<div class="container">
+  <div class="globe-wrap" id="globeWrap">
+    <canvas id="globe"></canvas>
+
+    <div class="ui" id="topUI">
+      <button class="btn" id="toggleSnow">Start Snow</button>
+      <label class="btn" title="Snow intensity">
+        Intensity
+        <input id="intensity" class="slider" type="range" min="0" max="100" value="40" />
+      </label>
+      <button class="btn" id="requestMotion">Enable Motion</button>
+    </div>
+
+    <div class="info" id="hint">Swipe left/right repeatedly or shake device to trigger snow.</div>
+  </div>
+</div>
+
+<script>
+// ===============================
+// MAIN SNOW GLOBE LOGIC
+// ===============================
+(() => {
+
+  const canvas = document.getElementById('globe');
+  const ctx = canvas.getContext('2d');
+  const wrap = document.getElementById('globeWrap');
+  const toggleBtn = document.getElementById('toggleSnow');
+  const intensityRange = document.getElementById('intensity');
+  const requestMotionBtn = document.getElementById('requestMotion');
+  const hint = document.getElementById('hint');
+
+  // ---------------------------
+  // Background image
+  // ---------------------------
+  const bgImage = new Image();
+  bgImage.src = "image1.png";     // <— REPLACE WITH YOUR IMAGE FILE
+  let imageLoaded = false;
+  bgImage.onload = () => {
+    imageLoaded = true;
+    fitCanvas();
+  };
+
+  // ---------------------------
+  // Canvas scaling
+  // ---------------------------
+  function fitCanvas() {
+    const rect = wrap.getBoundingClientRect();
+    const dpr = Math.min(window.devicePixelRatio || 1, 2);
+    canvas.width = rect.width * dpr;
+    canvas.height = rect.height * dpr;
+    canvas.style.width = rect.width + "px";
+    canvas.style.height = rect.height + "px";
+    ctx.scale(dpr, dpr);
+  }
+  window.addEventListener("resize", fitCanvas);
+
+  // ---------------------------
+  // Snow particle system
+  // ---------------------------
+  let particles = [];
+  let running = false;
+  let baseIntensity = 40;
+  let currentIntensity = 0;
+  let lastTime = performance.now();
+
+  function spawnParticle() {
+    particles.push({
+      x: Math.random() * canvas.clientWidth,
+      y: -10,
+      vy: 1 + Math.random() * 3,
+      vx: (Math.random() - 0.5) * 1.2,
+      size: 1 + Math.random() * 3,
+    });
+  }
+
+  function updateParticles() {
+    particles = particles.filter(p => p.y < canvas.clientHeight + 20);
+    particles.forEach(p => {
+      p.y += p.vy;
+      p.x += p.vx;
+    });
+  }
+
+  function drawParticles() {
+    ctx.fillStyle = "white";
+    particles.forEach(p => {
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, p.size, 0, Math.PI * 2);
+      ctx.fill();
+    });
+  }
+
+  // ---------------------------
+  // MASTER DRAW FRAME
+  // ---------------------------
+  function drawFrame() {
+    const now = performance.now();
+    const dt = now - lastTime;
+    lastTime = now;
+
+    // Background
+    if (imageLoaded) {
+      const w = canvas.clientWidth;
+      const h = canvas.clientHeight;
+      const iw = bgImage.width;
+      const ih = bgImage.height;
+      const scale = Math.max(w / iw, h / ih);
+      const sw = iw * scale;
+      const sh = ih * scale;
+      ctx.drawImage(bgImage, (w - sw) / 2, (h - sh) / 2, sw, sh);
+    } else {
+      ctx.fillStyle = "#000";
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+    }
+
+    // Snow intensity decay
+    currentIntensity *= 0.97;
+
+    // Spawn based on intensity
+    if (running || currentIntensity > 1) {
+      let spawnCount = currentIntensity * 0.2;
+      for (let i = 0; i < spawnCount; i++) spawnParticle();
+      updateParticles();
+      drawParticles();
+    }
+
+    requestAnimationFrame(drawFrame);
+  }
+  requestAnimationFrame(drawFrame);
+
+  // ---------------------------
+  // Button actions
+  // ---------------------------
+  toggleBtn.onclick = () => {
+    running = !running;
+    toggleBtn.textContent = running ? "Stop Snow" : "Start Snow";
+  };
+
+  intensityRange.oninput = e => {
+    baseIntensity = parseInt(e.target.value);
+  };
+
+  // ---------------------------
+  // Swipe detection
+  // ---------------------------
+  let lastX = 0;
+  let swipeCount = 0;
+  canvas.addEventListener("touchmove", (e) => {
+    const x = e.touches[0].clientX;
+    if (Math.abs(x - lastX) > 25) {
+      swipeCount++;
+      lastX = x;
+      if (swipeCount > 4) {
+        currentIntensity = baseIntensity + swipeCount * 5;
+        running = true;
+      }
+    }
+  });
+  canvas.addEventListener("touchend", () => {
+    swipeCount = 0;
+  });
+
+  // ---------------------------
+  // Shake detection (optional)
+  // ---------------------------
+  function handleMotion(e) {
+    const a = e.accelerationIncludingGravity;
+    if (!a) return;
+    const magnitude = Math.abs(a.x) + Math.abs(a.y) + Math.abs(a.z);
+
+    if (magnitude > 28) {
+      currentIntensity = baseIntensity + (magnitude * 2);
+      running = true;
+      navigator.vibrate?.(40);
+    }
+  }
+
+  requestMotionBtn.onclick = async () => {
+    if (DeviceMotionEvent?.requestPermission) {
+      const p = await DeviceMotionEvent.requestPermission();
+      if (p === "granted") {
+        window.addEventListener("devicemotion", handleMotion);
+        hint.textContent = "Motion enabled — shake device!";
+      }
+    } else {
+      window.addEventListener("devicemotion", handleMotion);
+      hint.textContent = "Motion enabled (browser).";
+    }
+  };
+
+})();
+</script>
+</body>
+</html>
