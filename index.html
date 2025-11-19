@@ -1,0 +1,634 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1.0,viewport-fit=cover" />
+<title>WebGL Snow Globe — Three.js</title>
+<style>
+  :root{
+    --bg:#071226;
+    --ui-bg: rgba(255,255,255,0.06);
+    --accent:#9ad4ff;
+    --panel: rgba(10,14,22,0.6);
+  }
+  html,body{height:100%;margin:0;background:var(--bg);font-family:Inter,system-ui,Arial;color:#fff; -webkit-font-smoothing:antialiased; -moz-osx-font-smoothing:grayscale;}
+  #app{height:100vh;display:flex;align-items:center;justify-content:center;padding:12px;box-sizing:border-box;}
+  .stage{width:100%;max-width:1000px;aspect-ratio:1/1;position:relative;border-radius:28px;overflow:hidden;box-shadow:0 20px 60px rgba(0,0,0,0.55);background:linear-gradient(180deg,#041220 0%, #08162a 100%);}
+  canvas{display:block;width:100%;height:100%}
+  .ui {
+    position:absolute;left:12px;top:12px;display:flex;gap:8px;flex-direction:row;align-items:center;z-index:50;
+    background:var(--panel);backdrop-filter: blur(8px);padding:8px;border-radius:12px;
+  }
+  .ui button, .ui select { background:transparent;border:1px solid rgba(255,255,255,0.06);color:#fff;padding:8px 10px;border-radius:10px;cursor:pointer; }
+  .bottom-ui{position:absolute;left:12px;bottom:12px;display:flex;gap:8px;align-items:center;background:var(--panel);padding:8px;border-radius:12px;}
+  .label{font-size:13px;color:#d8e9ff;margin-right:6px}
+  .small{font-size:13px;padding:6px 8px}
+  .theme-select{padding:6px;border-radius:8px}
+  .hint{position:absolute;right:12px;bottom:12px;background:linear-gradient(180deg, rgba(0,0,0,0.3), rgba(255,255,255,0.02));padding:8px;border-radius:10px;font-size:13px;color:#cfe9ff;opacity:0.95}
+  @media (max-width:600px){
+    .ui{left:8px;top:8px;padding:6px}
+    .bottom-ui{left:8px;bottom:8px;padding:6px}
+  }
+</style>
+</head>
+<body>
+  <div id="app">
+    <div class="stage" id="stage">
+      <div class="ui">
+        <button id="motionBtn" class="small">Enable Motion</button>
+        <select id="themeSelect" class="theme-select small" title="Particle Theme">
+          <option value="snow">Snow</option>
+          <option value="glitter">Glitter</option>
+          <option value="confetti">Confetti</option>
+          <option value="sparkles">Sparkles</option>
+        </select>
+        <button id="burstBtn" class="small">Tap Burst</button>
+        <button id="resetBtn" class="small">Reset</button>
+      </div>
+      <div class="bottom-ui">
+        <div class="label">Intensity</div>
+        <input id="intensity" type="range" min="0" max="200" value="60">
+      </div>
+      <div class="hint">Swipe left/right repeatedly or shake device to swirl. Tap globe to burst particles.</div>
+      <!-- WebGL canvas injected by script -->
+    </div>
+  </div>
+
+<script type="module">
+/* WebGL Snow Globe
+   - Uses three.js as ES modules via UNPKG
+   - Replace "image1.png" with your own background or environment map (same directory)
+   - Modern browser required
+*/
+
+import * as THREE from 'https://unpkg.com/three@0.154.0/build/three.module.js';
+import { OrbitControls } from 'https://unpkg.com/three@0.154.0/examples/jsm/controls/OrbitControls.js';
+import { EffectComposer } from 'https://unpkg.com/three@0.154.0/examples/jsm/postprocessing/EffectComposer.js';
+import { RenderPass } from 'https://unpkg.com/three@0.154.0/examples/jsm/postprocessing/RenderPass.js';
+import { UnrealBloomPass } from 'https://unpkg.com/three@0.154.0/examples/jsm/postprocessing/UnrealBloomPass.js';
+import { SMAAPass } from 'https://unpkg.com/three@0.154.0/examples/jsm/postprocessing/SMAAPass.js';
+
+const stage = document.getElementById('stage');
+const motionBtn = document.getElementById('motionBtn');
+const themeSelect = document.getElementById('themeSelect');
+const burstBtn = document.getElementById('burstBtn');
+const resetBtn = document.getElementById('resetBtn');
+const intensityControl = document.getElementById('intensity');
+
+let renderer, scene, camera, composer, bloomPass;
+let globeGroup, glassMesh, innerMesh;
+let particleSystem, particleUniforms;
+let mouse = new THREE.Vector2();
+let clock = new THREE.Clock();
+
+// Config
+const IMAGE_PATH = 'image1.png'; // <- replace if needed
+const PARTICLE_COUNT = 2500;     // finite but large for density
+const PARTICLE_AREA_RADIUS = 0.44; // relative to globe radius
+let baseIntensity = parseFloat(intensityControl.value); // user controlled
+
+// Init renderer & scene
+function init() {
+  renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+  renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+  renderer.setSize(stage.clientWidth, stage.clientHeight);
+  renderer.outputEncoding = THREE.sRGBEncoding;
+  stage.appendChild(renderer.domElement);
+
+  scene = new THREE.Scene();
+  scene.background = null;
+
+  camera = new THREE.PerspectiveCamera(40, stage.clientWidth / stage.clientHeight, 0.1, 100);
+  camera.position.set(0, 0.5, 2.2);
+
+  const controls = new OrbitControls(camera, renderer.domElement);
+  controls.enablePan = false;
+  controls.enableZoom = false;
+  controls.enableDamping = true;
+  controls.minPolarAngle = Math.PI/2 - 0.8;
+  controls.maxPolarAngle = Math.PI/2 + 0.8;
+  controls.target.set(0, 0, 0);
+
+  // Lighting
+  const hemi = new THREE.HemisphereLight(0xffffff, 0x444444, 0.7);
+  scene.add(hemi);
+  const dir = new THREE.DirectionalLight(0xffffff, 0.6);
+  dir.position.set(2, 3, 2);
+  scene.add(dir);
+
+  globeGroup = new THREE.Group();
+  scene.add(globeGroup);
+
+  // Add inner backdrop (image mapped)
+  const texLoader = new THREE.TextureLoader();
+  const bgTex = texLoader.load(IMAGE_PATH, () => renderer.render(scene, camera));
+  bgTex.encoding = THREE.sRGBEncoding;
+  const innerGeo = new THREE.SphereGeometry(1, 64, 64);
+  const innerMat = new THREE.MeshStandardMaterial({
+    map: bgTex,
+    side: THREE.BackSide,
+    roughness: 1.0,
+    metalness: 0.0
+  });
+  innerMesh = new THREE.Mesh(innerGeo, innerMat);
+  innerMesh.scale.set(0.995, 0.995, 0.995); // slight inset
+  globeGroup.add(innerMesh);
+
+  // Glass outer sphere (subtle fresnel/reflection)
+  const glassGeo = new THREE.SphereGeometry(1.01, 64, 64);
+  const glassMat = new THREE.MeshPhysicalMaterial({
+    color: 0xffffff,
+    metalness: 0,
+    roughness: 0.05,
+    transmission: 0.9,
+    thickness: 0.5,
+    envMapIntensity: 0.8,
+    clearcoat: 0.6,
+    clearcoatRoughness: 0.05,
+    reflectivity: 0.3,
+    opacity: 0.98,
+    transparent: true
+  });
+  glassMesh = new THREE.Mesh(glassGeo, glassMat);
+  globeGroup.add(glassMesh);
+
+  // Base pedestal (subtle)
+  const baseGeo = new THREE.CylinderGeometry(1.08, 1.2, 0.35, 48);
+  const baseMat = new THREE.MeshStandardMaterial({ color: 0x111214, metalness: 0.2, roughness: 0.6 });
+  const base = new THREE.Mesh(baseGeo, baseMat);
+  base.position.set(0, -1.2, 0);
+  globeGroup.add(base);
+
+  // Particle system (Points) with custom attributes
+  createParticles();
+
+  // Postprocessing: composer + bloom
+  composer = new EffectComposer(renderer);
+  composer.addPass(new RenderPass(scene, camera));
+  bloomPass = new UnrealBloomPass(new THREE.Vector2(stage.clientWidth, stage.clientHeight), 0.9, 0.4, 0.1);
+  bloomPass.threshold = 0.15;
+  bloomPass.strength = 0.9;
+  bloomPass.radius = 0.6;
+  composer.addPass(bloomPass);
+
+  // SMAA helps on non-retina screens
+  const smaa = new SMAAPass(stage.clientWidth * renderer.getPixelRatio(), stage.clientHeight * renderer.getPixelRatio());
+  composer.addPass(smaa);
+
+  window.addEventListener('resize', onResize);
+  renderer.domElement.addEventListener('pointerdown', onPointerDown);
+  renderer.domElement.addEventListener('pointerup', onPointerUp);
+  renderer.domElement.addEventListener('pointermove', onPointerMove);
+
+  // Interaction: swipe tracking
+  setupSwipeAndShake();
+
+  // UI hooks
+  intensityControl.addEventListener('input', (e)=> baseIntensity = parseFloat(e.target.value));
+  themeSelect.addEventListener('change', (e)=> setTheme(e.target.value));
+  burstBtn.addEventListener('click', ()=> triggerBurst(1.6));
+  resetBtn.addEventListener('click', resetParticles);
+  motionBtn.addEventListener('click', requestMotionPermission);
+
+  animate();
+}
+
+// -----------------------------
+// Particle creation & shader
+// -----------------------------
+function createParticles() {
+  // Buffer geometry for Points
+  const geometry = new THREE.BufferGeometry();
+  const positions = new Float32Array(PARTICLE_COUNT * 3);
+  const velocities = new Float32Array(PARTICLE_COUNT * 3); // vx, vy, vz per particle
+  const sizes = new Float32Array(PARTICLE_COUNT);
+  const seeds = new Float32Array(PARTICLE_COUNT);
+
+  for (let i = 0; i < PARTICLE_COUNT; i++) {
+    // place inside sphere but biased toward top half for "floating" start
+    const theta = Math.random() * Math.PI * 2;
+    const phi = Math.acos((Math.random() * 0.8) - 0.4); // bias to center/top
+    const r = 0.7 * (0.4 + Math.random() * 0.6) * PARTICLE_AREA_RADIUS;
+
+    const x = r * Math.sin(phi) * Math.cos(theta);
+    const y = r * Math.cos(phi);
+    const z = r * Math.sin(phi) * Math.sin(theta);
+
+    positions[i * 3] = x;
+    positions[i * 3 + 1] = y;
+    positions[i * 3 + 2] = z;
+
+    velocities[i * 3] = (Math.random() - 0.5) * 0.002; // tiny initial
+    velocities[i * 3 + 1] = (Math.random() - 0.2) * 0.002;
+    velocities[i * 3 + 2] = (Math.random() - 0.5) * 0.002;
+
+    sizes[i] = Math.random() * 6.0 + 2.5; // pixel sizes
+    seeds[i] = Math.random() * 1000.0;
+  }
+
+  geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+  geometry.setAttribute('aVelocity', new THREE.BufferAttribute(velocities, 3));
+  geometry.setAttribute('aSize', new THREE.BufferAttribute(sizes, 1));
+  geometry.setAttribute('aSeed', new THREE.BufferAttribute(seeds, 1));
+
+  // Shader material for glow + size flicker
+  particleUniforms = {
+    uTime: { value: 0 },
+    uPointSize: { value: 1.0 },
+    uThemeColor: { value: new THREE.Color(0xffffff) },
+    uPixelRatio: { value: window.devicePixelRatio || 1.0 }
+  };
+
+  const particleVertex = `
+    attribute vec3 aVelocity;
+    attribute float aSize;
+    attribute float aSeed;
+    uniform float uTime;
+    uniform float uPointSize;
+    varying float vSeed;
+    varying float vAlpha;
+    void main(){
+      vSeed = aSeed;
+      // simple wobble per-particle (pseudo-noise)
+      float t = uTime * 0.6 + aSeed;
+      vec3 pos = position;
+      // micro drift to simulate water
+      pos.x += sin(t * 0.7) * 0.003;
+      pos.z += cos(t * 0.9) * 0.003;
+      // compute gl_Position
+      vec4 mvPosition = modelViewMatrix * vec4(pos, 1.0);
+      gl_PointSize = aSize * uPointSize * (uPixelRatio);
+      gl_Position = projectionMatrix * mvPosition;
+      // alpha will be computed in fragment for soft particles
+      vAlpha = 1.0;
+    }
+  `;
+  const particleFragment = `
+    precision mediump float;
+    uniform vec3 uThemeColor;
+    varying float vSeed;
+    varying float vAlpha;
+    void main(){
+      float r = length(gl_PointCoord - vec2(0.5));
+      float mask = smoothstep(0.5, 0.0, r);
+      // soft edge + slight sparkle
+      float sparkle = step(0.98, fract(vSeed * 37.0));
+      vec3 col = uThemeColor;
+      float alpha = mask * (0.8 + 0.4 * sparkle);
+      gl_FragColor = vec4(col * alpha, alpha);
+    }
+  `;
+
+  const material = new THREE.ShaderMaterial({
+    uniforms: particleUniforms,
+    vertexShader: particleVertex,
+    fragmentShader: particleFragment,
+    transparent: true,
+    depthTest: true,
+    blending: THREE.AdditiveBlending
+  });
+
+  particleSystem = new THREE.Points(geometry, material);
+  particleSystem.frustumCulled = false;
+  globeGroup.add(particleSystem);
+}
+
+// -----------------------------
+// Particle physics (CPU) update
+// -----------------------------
+const state = {
+  velocities: null, // Float32Array extracted from geometry
+  settled: new Uint8Array(PARTICLE_COUNT), // bool-like
+  theme: 'snow',
+  wobble: new THREE.Vector3(0,0,0),
+  globeRotationVel: new THREE.Vector3(0,0,0)
+};
+
+function ensureStateArrays() {
+  const geom = particleSystem.geometry;
+  if (!state.velocities) {
+    state.velocities = new Float32Array(geom.getAttribute('aVelocity').array);
+  }
+}
+ensureStateArrays();
+
+function updateParticlesPhysics(delta) {
+  ensureStateArrays();
+  const geom = particleSystem.geometry;
+  const pos = geom.getAttribute('position').array;
+  const vel = state.velocities;
+  const sizes = geom.getAttribute('aSize').array;
+  const time = performance.now() * 0.001;
+  const intensity = baseIntensity * 0.02 + (baseIntensity * 0.002);
+  const globeRadius = 1.0;
+
+  for (let i = 0; i < PARTICLE_COUNT; i++) {
+    const j = i*3;
+    // vector from center
+    const x = pos[j], y = pos[j+1], z = pos[j+2];
+
+    // small Brownian motion
+    vel[j] += (Math.random()-0.5) * 0.0006 * (1 + intensity*0.02);
+    vel[j+1] += (Math.random()-0.5) * 0.0006 * (1 + intensity*0.02);
+    vel[j+2] += (Math.random()-0.5) * 0.0006 * (1 + intensity*0.02);
+
+    // gravity toward bottom (y negative direction means bottom in our sphere coordinate)
+    vel[j+1] -= 0.0009 * (1.0 + intensity * 0.003);
+
+    // damping / water viscosity
+    vel[j] *= 0.985;
+    vel[j+1] *= 0.985;
+    vel[j+2] *= 0.985;
+
+    // apply global wobble (from shake/swipe) - apply small impulse proportional to wobble vector
+    vel[j] += state.wobble.x * (Math.random() * 0.6 + 0.2);
+    vel[j+1] += state.wobble.y * (Math.random() * 0.8 + 0.2);
+    vel[j+2] += state.wobble.z * (Math.random() * 0.6 + 0.2);
+
+    // integrate
+    pos[j] += vel[j] * delta * 60.0;
+    pos[j+1] += vel[j+1] * delta * 60.0;
+    pos[j+2] += vel[j+2] * delta * 60.0;
+
+    // constrain to inner sphere radius
+    const rr = Math.sqrt(pos[j]*pos[j] + pos[j+1]*pos[j+1] + pos[j+2]*pos[j+2]);
+    if (rr > (globeRadius - 0.04)) {
+      // push back toward center on collision with glass inner side
+      const nx = pos[j]/rr, ny = pos[j+1]/rr, nz = pos[j+2]/rr;
+      pos[j] = nx * (globeRadius - 0.04);
+      pos[j+1] = ny * (globeRadius - 0.04);
+      pos[j+2] = nz * (globeRadius - 0.04);
+      // reflect velocity a bit
+      const dot = vel[j]*nx + vel[j+1]*ny + vel[j+2]*nz;
+      vel[j] -= 1.8 * dot * nx;
+      vel[j+1] -= 1.8 * dot * ny;
+      vel[j+2] -= 1.8 * dot * nz;
+      vel[j] *= 0.6; vel[j+1] *= 0.6; vel[j+2] *= 0.6;
+    }
+
+    // settle condition: if near bottom hemisphere and velocity low, slowly slide to bottom and rest
+    if (pos[j+1] < -0.65 && Math.hypot(vel[j], vel[j+1], vel[j+2]) < 0.0005) {
+      // nudge toward final resting ring (y approx -0.9)
+      const targetY = -0.92 + (Math.random()*0.02);
+      pos[j+1] = THREE.MathUtils.lerp(pos[j+1], targetY, 0.02);
+      vel[j] *= 0.5; vel[j+1] *= 0.5; vel[j+2] *= 0.5;
+    }
+  }
+  geom.getAttribute('position').needsUpdate = true;
+
+  // relax wobble slowly
+  state.wobble.multiplyScalar(0.92);
+  // rotate globe group slightly based on globeRotationVel (3D wobble)
+  globeGroup.rotation.x += state.globeRotationVel.x * delta;
+  globeGroup.rotation.y += state.globeRotationVel.y * delta;
+  globeGroup.rotation.z += state.globeRotationVel.z * delta;
+  state.globeRotationVel.multiplyScalar(0.95);
+}
+
+// -----------------------------
+// Interaction: pointer (tap burst), swipe, shake
+// -----------------------------
+let isPointerDown = false;
+let pointerStart = { x: 0, y: 0, t: 0 };
+let swipeHistory = [];
+
+function onPointerDown(e) {
+  isPointerDown = true;
+  pointerStart.x = e.clientX || e.touches?.[0]?.clientX;
+  pointerStart.y = e.clientY || e.touches?.[0]?.clientY;
+  pointerStart.t = performance.now();
+}
+
+function onPointerUp(e) {
+  isPointerDown = false;
+  const dx = (e.clientX || (e.changedTouches?.[0]?.clientX || pointerStart.x)) - pointerStart.x;
+  const dt = performance.now() - pointerStart.t;
+  // quick tap -> burst
+  if (Math.abs(dx) < 8 && dt < 200) {
+    triggerBurst(1.8);
+  }
+}
+
+function onPointerMove(e) {
+  // track swipes
+  const x = e.clientX || (e.touches?.[0]?.clientX);
+  if (x !== undefined) {
+    swipeHistory.push({ x: x, t: performance.now() });
+    // keep last 800ms
+    const now = performance.now();
+    swipeHistory = swipeHistory.filter(s => now - s.t < 800);
+    // evaluate if multiple direction changes
+    if (swipeHistory.length > 6) {
+      let dirs = [];
+      for (let i = 1; i < swipeHistory.length; i++) {
+        const dx = swipeHistory[i].x - swipeHistory[i-1].x;
+        if (Math.abs(dx) > 20) dirs.push(dx > 0 ? 1 : -1);
+      }
+      let changes = 0;
+      for (let i = 1; i < dirs.length; i++) if (dirs[i] !== dirs[i-1]) changes++;
+      if (changes >= 3) {
+        // Apply horizontal swirl impulse
+        const dir = (swipeHistory[swipeHistory.length-1].x - swipeHistory[0].x) > 0 ? 1 : -1;
+        swipeHistory = [];
+        applySwirlImpulse(dir * (1 + baseIntensity * 0.01));
+      }
+    }
+  }
+}
+
+// shake detection (device motion)
+let lastAccel = { x: 0, y: 0, z: 0 };
+let lastShakeTime = 0;
+let shakeCount = 0;
+function handleMotion(e) {
+  const a = e.accelerationIncludingGravity || e.acceleration;
+  if (!a) return;
+  const dx = (a.x || 0) - lastAccel.x;
+  const dy = (a.y || 0) - lastAccel.y;
+  const dz = (a.z || 0) - lastAccel.z;
+  lastAccel.x = a.x || 0; lastAccel.y = a.y || 0; lastAccel.z = a.z || 0;
+  const mag = Math.sqrt(dx*dx + dy*dy + dz*dz);
+  const now = Date.now();
+  if (mag > 12) { // threshold tuned for phone shakes
+    if (now - lastShakeTime < 1200) {
+      shakeCount++;
+    } else {
+      shakeCount = 1;
+    }
+    lastShakeTime = now;
+    // bigger shakeCount -> stronger swirl & wobble
+    const force = Math.min(6, 1 + shakeCount * 1.6 + baseIntensity * 0.02);
+    // globe wobble
+    state.globeRotationVel.x += (Math.random() - 0.5) * 0.08 * force;
+    state.globeRotationVel.y += (Math.random() - 0.5) * 0.12 * force;
+    state.globeRotationVel.z += (Math.random() - 0.5) * 0.06 * force;
+    // apply global wobble impulse to particles
+    state.wobble.x += (Math.random() - 0.5) * 0.18 * force;
+    state.wobble.y += (Math.random() - 0.5) * 0.18 * force;
+    state.wobble.z += (Math.random() - 0.5) * 0.18 * force;
+    // brief burst
+    triggerBurst(1.2 + force * 0.2);
+  }
+}
+
+// request permission for iOS motion
+async function requestMotionPermission() {
+  if (typeof DeviceMotionEvent !== 'undefined' && typeof DeviceMotionEvent.requestPermission === 'function') {
+    try {
+      const resp = await DeviceMotionEvent.requestPermission();
+      if (resp === 'granted') {
+        window.addEventListener('devicemotion', handleMotion);
+        motionBtn.textContent = 'Motion Enabled';
+      } else {
+        motionBtn.textContent = 'Denied';
+      }
+    } catch (e) {
+      console.warn('motion request failed', e);
+    }
+  } else {
+    window.addEventListener('devicemotion', handleMotion);
+    motionBtn.textContent = 'Motion Enabled';
+  }
+}
+
+// apply directional swirl impulse (swipe)
+function applySwirlImpulse(strength = 1.6) {
+  // use camera space direction (left/right)
+  state.wobble.x += (Math.random() - 0.5) * 0.15 * strength;
+  state.wobble.y += (Math.random() - 0.2) * 0.12 * strength;
+  state.wobble.z += (Math.random() - 0.5) * 0.15 * strength;
+  state.globeRotationVel.y += (Math.random() - 0.5) * 0.08 * strength;
+  triggerBurst(0.6 + strength * 0.5);
+}
+
+// trigger particle burst (small radial velocity add)
+function triggerBurst(scale = 1.0) {
+  const geom = particleSystem.geometry;
+  const pos = geom.getAttribute('position').array;
+  ensureStateArrays();
+  const vel = state.velocities;
+  for (let i = 0; i < PARTICLE_COUNT; i++) {
+    const j = i * 3;
+    // radial outward impulse
+    const dx = pos[j] + (Math.random() - 0.5) * 0.05;
+    const dy = pos[j+1] + (Math.random() - 0.5) * 0.05;
+    const dz = pos[j+2] + (Math.random() - 0.5) * 0.05;
+    const len = Math.max(0.001, Math.sqrt(dx*dx + dy*dy + dz*dz));
+    vel[j] += (dx/len) * 0.002 * scale * (1 + baseIntensity*0.01) * (Math.random()*2.0);
+    vel[j+1] += (dy/len) * 0.0025 * scale * (1 + baseIntensity*0.01) * (Math.random()*2.0);
+    vel[j+2] += (dz/len) * 0.002 * scale * (1 + baseIntensity*0.01) * (Math.random()*2.0);
+  }
+}
+
+// reset particles to fresh positions
+function resetParticles() {
+  const geom = particleSystem.geometry;
+  const pos = geom.getAttribute('position').array;
+  const vel = geom.getAttribute('aVelocity').array;
+  for (let i = 0; i < PARTICLE_COUNT; i++) {
+    const j = i*3;
+    const theta = Math.random() * Math.PI * 2;
+    const phi = Math.acos((Math.random() * 0.8) - 0.4);
+    const r = 0.7 * (0.4 + Math.random() * 0.6) * PARTICLE_AREA_RADIUS;
+    pos[j] = r * Math.sin(phi) * Math.cos(theta);
+    pos[j+1] = r * Math.cos(phi);
+    pos[j+2] = r * Math.sin(phi) * Math.sin(theta);
+    vel[j] = (Math.random()-0.5)*0.002;
+    vel[j+1] = (Math.random()-0.2)*0.002;
+    vel[j+2] = (Math.random()-0.5)*0.002;
+  }
+  particleSystem.geometry.getAttribute('position').needsUpdate = true;
+  state.velocities = new Float32Array(particleSystem.geometry.getAttribute('aVelocity').array);
+}
+
+// -----------------------------
+// Themes
+// -----------------------------
+function setTheme(name) {
+  state.theme = name;
+  const color = (name === 'snow') ? 0xffffff :
+                (name === 'glitter') ? 0xfff1c7 :
+                (name === 'confetti') ? 0xff6b6b :
+                (name === 'sparkles') ? 0x9ad4ff : 0xffffff;
+  particleUniforms.uThemeColor.value.setHex(color);
+
+  // change particle sizes slightly per theme
+  const sizes = particleSystem.geometry.getAttribute('aSize').array;
+  for (let i=0;i<sizes.length;i++){
+    if (name === 'snow') sizes[i] = 3.0 + Math.random() * 4.0;
+    if (name === 'glitter') sizes[i] = 1.0 + Math.random() * 3.0;
+    if (name === 'confetti') sizes[i] = 2.0 + Math.random() * 6.0;
+    if (name === 'sparkles') sizes[i] = 0.8 + Math.random() * 2.6;
+  }
+  particleSystem.geometry.getAttribute('aSize').needsUpdate = true;
+
+  // bloom strength tweak
+  bloomPass.strength = (name === 'glitter' || name === 'sparkles') ? 1.4 : 0.9;
+  bloomPass.radius = (name === 'glitter') ? 0.9 : 0.6;
+}
+
+// -----------------------------
+// Resize
+// -----------------------------
+function onResize() {
+  const w = stage.clientWidth, h = stage.clientHeight;
+  renderer.setSize(w, h);
+  composer.setSize(w, h);
+  camera.aspect = w / h;
+  camera.updateProjectionMatrix();
+  particleUniforms.uPixelRatio.value = window.devicePixelRatio || 1;
+}
+
+// -----------------------------
+// Animation loop
+// -----------------------------
+let last = performance.now();
+function animate() {
+  const now = performance.now();
+  const delta = Math.min(0.033, (now - last) / 1000);
+  last = now;
+
+  // update particle time uniform
+  particleUniforms.uTime.value = now * 0.001;
+
+  // physics
+  updateParticlesPhysics(delta);
+
+  // gentle globe slow drift
+  globeGroup.rotation.y += 0.002 * delta * 60;
+
+  // render via composer for bloom
+  composer.render(delta);
+
+  requestAnimationFrame(animate);
+}
+
+// -----------------------------
+// Small helpers & init call
+// -----------------------------
+function ensureStateArrays() {
+  if (!state.velocities) {
+    state.velocities = new Float32Array(particleSystem.geometry.getAttribute('aVelocity').array);
+    // copy initial velocities into state
+    const vAttr = particleSystem.geometry.getAttribute('aVelocity');
+    vAttr.array.forEach((v,i)=> state.velocities[i] = vAttr.array[i]);
+  }
+}
+
+// setup swipe+shake initializations
+function setupSwipeAndShake() {
+  state.wobble.set(0,0,0);
+  state.globeRotationVel.set(0,0,0);
+  // pointer listeners were added in init
+}
+
+// expose simple debugging
+window.__webglGlobe = { resetParticles, triggerBurst, applySwirlImpulse, setTheme };
+
+// start
+init();
+setTheme('snow');
+
+</script>
+</body>
+</html>
