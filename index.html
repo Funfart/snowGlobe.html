@@ -1,0 +1,398 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1.0,viewport-fit=cover"/>
+<title>Snow Globe Viewer</title>
+<style>
+  :root{
+    --bg:#0b1220;
+    --ui-bg: rgba(255,255,255,0.06);
+    --accent: #9ad4ff;
+  }
+  html,body{height:100%;margin:0;background:var(--bg);color:#fff;font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial;}
+  .container{display:flex;flex-direction:column;height:100vh;align-items:center;justify-content:center;padding:8px;box-sizing:border-box;}
+  .globe-wrap{width:100%;max-width:900px;aspect-ratio:3/2;position:relative;border-radius:18px;overflow:hidden;box-shadow:0 10px 30px rgba(0,0,0,0.6), inset 0 1px 0 rgba(255,255,255,0.02);}
+  canvas{width:100%;height:100%;display:block;touch-action:none} /* touch-action none helps avoid passive scroll interfering with gestures */
+  .ui{
+    position:absolute;left:8px;top:8px;display:flex;gap:8px;align-items:center;backdrop-filter: blur(6px);
+  }
+  .btn{
+    background:var(--ui-bg);border:1px solid rgba(255,255,255,0.06);padding:6px 10px;border-radius:10px;color:#fff;font-size:14px;
+  }
+  .info{
+    position:absolute;right:8px;bottom:8px;background:linear-gradient(180deg, rgba(0,0,0,0.3), rgba(255,255,255,0.02));
+    padding:6px 10px;border-radius:10px;font-size:13px;color:#dfefff;opacity:0.9;
+  }
+  .slider{width:110px}
+  /* small-screen tweaks */
+  @media (max-width:480px){
+    .globe-wrap{border-radius:14px}
+    .btn{padding:6px 8px;font-size:13px}
+  }
+</style>
+</head>
+<body>
+<div class="container">
+  <div class="globe-wrap" id="globeWrap">
+    <canvas id="globe"></canvas>
+
+    <div class="ui" id="topUI">
+      <button class="btn" id="toggleSnow">Start Snow</button>
+      <label class="btn" title="Snow intensity">
+        Intensity
+        <input id="intensity" class="slider" type="range" min="0" max="100" value="40" />
+      </label>
+      <button class="btn" id="requestMotion">Enable Motion</button>
+    </div>
+
+    <div class="info" id="hint">Swipe left/right rapidly or shake device to trigger snow. Replace <code>image1.png</code> with your image.</div>
+  </div>
+</div>
+
+<script>
+/* Snow Globe Viewer
+   - Replace "image1.png" with your own image file in same folder or provide full URL.
+   - iOS 13+ requires user gesture to call DeviceMotionEvent.requestPermission(); the "Enable Motion" button requests permission.
+*/
+
+(() => {
+  const canvas = document.getElementById('globe');
+  const ctx = canvas.getContext('2d');
+  const wrap = document.getElementById('globeWrap');
+  const toggleBtn = document.getElementById('toggleSnow');
+  const intensityRange = document.getElementById('intensity');
+  const requestMotionBtn = document.getElementById('requestMotion');
+  const hint = document.getElementById('hint');
+
+  // Image placeholder (replace with your asset)
+  const bgImage = new Image();
+  bgImage.src = 'image1.png';
+  bgImage.alt = 'Snow Globe Background';
+  let imageLoaded = false;
+  bgImage.onload = () => { imageLoaded = true; fitCanvas(); drawFrame(); };
+
+  // Canvas size and pixel ratio for crisp rendering
+  function fitCanvas() {
+    const rect = wrap.getBoundingClientRect();
+    const dpr = Math.min(window.devicePixelRatio || 1, 2);
+    canvas.width = Math.round(rect.width * dpr);
+    canvas.height = Math.round(rect.height * dpr);
+    canvas.style.width = rect.width + 'px';
+    canvas.style.height = rect.height + 'px';
+    ctx.setTransform(dpr,0,0,dpr,0,0);
+  }
+  window.addEventListener('resize', () => { fitCanvas(); drawFrame(); });
+
+  // Snow particle system
+  let particles = [];
+  const MAX_PARTICLES = 600;
+  let running = false;
+  let baseIntensity = parseInt(intensityRange.value,10) || 40; // 0-100
+  let currentIntensity = 0; // dynamic based on interactions
+  const decayRate = 0.99; // how quickly intensity decays per frame (less than 1)
+  let lastTime = performance.now();
+
+  function rand(min,max){return Math.random()*(max-min)+min}
+
+  function spawnParticle() {
+    // spawn in top area of globe (with some horizontal spread)
+    const w = canvas.clientWidth;
+    const h = canvas.clientHeight;
+    const p = {
+      x: rand(0, w),
+      y: rand(-20, 0),
+      vx: rand(-0.5, 0.5) * (1 + currentIntensity/100),
+      vy: rand(0.6, 2.4) * (1 + currentIntensity/150),
+      size: rand(0.8, 3.5) * (1 + currentIntensity/150),
+      life: rand(4000, 13000), // ms to live
+      born: performance.now(),
+      sway: rand(0.5, 2.5),
+      swayOffset: rand(0, Math.PI*2)
+    };
+    particles.push(p);
+    if (particles.length > MAX_PARTICLES) particles.splice(0, particles.length - MAX_PARTICLES);
+  }
+
+  function updateParticles(dt) {
+    // spawn rate controlled by intensity
+    const spawnRate = Math.min(25 + currentIntensity * 3, 200); // particles per second-ish
+    const spawnThisFrame = spawnRate * (dt/1000);
+    for (let i=0;i<spawnThisFrame;i++) spawnParticle();
+
+    const w = canvas.clientWidth;
+    const h = canvas.clientHeight;
+    const now = performance.now();
+    for (let i = particles.length-1; i>=0; i--) {
+      const p = particles[i];
+      const age = now - p.born;
+      // sway motion
+      p.x += p.vx + Math.sin((age/1000) * p.sway + p.swayOffset) * 0.5;
+      p.y += p.vy;
+      // remove if below globe or older than life
+      if (p.y > h + 20 || age > p.life) particles.splice(i,1);
+    }
+  }
+
+  function drawFrame() {
+    const now = performance.now();
+    const dt = now - lastTime;
+    lastTime = now;
+
+    // background
+    ctx.clearRect(0,0,canvas.width,canvas.height);
+    if (imageLoaded) {
+      // draw image scaled to fill canvas while preserving aspect ratio, centered
+      const w = canvas.clientWidth; const h = canvas.clientHeight;
+      const iw = bgImage.naturalWidth; const ih = bgImage.naturalHeight;
+      const scale = Math.max(w/iw, h/ih);
+      const sw = iw * scale; const sh = ih * scale;
+      const dx = (w - sw)/2; const dy = (h - sh)/2;
+      ctx.drawImage(bgImage, dx, dy, sw, sh);
+    } else {
+      ctx.fillStyle = '#061226';
+      ctx.fillRect(0,0,canvas.clientWidth,canvas.clientHeight);
+    }
+
+    // subtle globe overlay (glass)
+    const grad = ctx.createLinearGradient(0,0,0,canvas.clientHeight);
+    grad.addColorStop(0,'rgba(255,255,255,0.03)');
+    grad.addColorStop(1,'rgba(0,0,0,0.05)');
+    ctx.fillStyle = grad;
+    ctx.fillRect(0,0,canvas.clientWidth,canvas.clientHeight);
+
+    // update intensity decay
+    currentIntensity = currentIntensity * Math.pow(decayRate, dt/16) ;
+    // small floor to avoid tiny fractions
+    if (currentIntensity < 0.01) currentIntensity = 0;
+
+    if (running || currentIntensity > 0.5) {
+      updateParticles(dt);
+      drawParticles();
+    }
+
+    // UI hint subtlety: fade when snow active
+    hint.style.opacity = (currentIntensity > 6) ? '0.4' : '0.9';
+
+    // loop
+    animationFrameId = requestAnimationFrame(drawFrame);
+  }
+
+  function drawParticles(){
+    ctx.save();
+    // draw snow with additive subtle glow
+    for (let i=0;i<particles.length;i++){
+      const p = particles[i];
+      const age = performance.now() - p.born;
+      const lifeRatio = 1 - (age / p.life);
+      const alpha = Math.max(0, Math.min(1, lifeRatio * 1.1));
+      const size = p.size * (1 + (1 - lifeRatio) * 0.6);
+      // simple circular snow particle
+      ctx.beginPath();
+      ctx.globalAlpha = alpha * Math.min(1, (0.3 + currentIntensity/200));
+      ctx.fillStyle = 'rgba(255,255,255,0.95)';
+      ctx.arc(p.x, p.y, size, 0, Math.PI*2);
+      ctx.fill();
+      // small blur/glow via a second translucent ring
+      ctx.globalAlpha = alpha * 0.12;
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, size*2.6, 0, Math.PI*2);
+      ctx.fill();
+    }
+    ctx.globalAlpha = 1;
+    ctx.restore();
+  }
+
+  // Start/stop functions
+  let animationFrameId = null;
+  function startSnow() {
+    running = true;
+    toggleBtn.textContent = 'Stop Snow';
+    if (!animationFrameId) {
+      lastTime = performance.now();
+      animationFrameId = requestAnimationFrame(drawFrame);
+    }
+  }
+  function stopSnow() {
+    running = false;
+    toggleBtn.textContent = 'Start Snow';
+    // we don't cancel the animationFrame loop in case intensity left; loop continues but particles won't spawn when intensity 0
+  }
+  toggleBtn.addEventListener('click', ()=>{
+    running ? stopSnow() : startSnow();
+  });
+
+  intensityRange.addEventListener('input', (e)=>{
+    baseIntensity = parseInt(e.target.value,10);
+  });
+
+  // Gesture detection (swipe left/right repeated) to trigger snow
+  let touchHistory = [];
+  const TOUCH_WINDOW = 700; // ms window to consider swipes a burst
+  const SWIPE_THRESHOLD = 30; // px
+  const SWIPE_BURST_REQUIRED = 3; // number of directional changes required
+
+  function onTouchStart(e){
+    e.preventDefault();
+    const t = e.changedTouches ? e.changedTouches[0] : e;
+    touchHistory.push({x: t.clientX, t: performance.now()});
+    // keep recent history
+    touchHistory = touchHistory.filter(h => (performance.now() - h.t) < TOUCH_WINDOW);
+  }
+
+  function onTouchMove(e){
+    // record positions (we keep them lightweight)
+    const t = e.changedTouches ? e.changedTouches[0] : e;
+    touchHistory.push({x: t.clientX, t: performance.now()});
+    touchHistory = touchHistory.filter(h => (performance.now() - h.t) < TOUCH_WINDOW);
+  }
+
+  function evaluateSwipes() {
+    if (touchHistory.length < 2) return;
+    // compute sequence of directions
+    const dirs = [];
+    for (let i=1;i<touchHistory.length;i++){
+      const dx = touchHistory[i].x - touchHistory[i-1].x;
+      if (Math.abs(dx) > SWIPE_THRESHOLD) dirs.push(dx>0 ? 1 : -1);
+    }
+    // count direction changes (left-right-left etc)
+    let changes = 0;
+    for (let i=1;i<dirs.length;i++) if (dirs[i] !== dirs[i-1]) changes++;
+    // If enough alternating swipes in short time, trigger snow
+    if (changes >= SWIPE_BURST_REQUIRED) {
+      // increase intensity based on number of changes and baseIntensity
+      const boost = Math.min(120, baseIntensity + changes * 22);
+      currentIntensity = Math.max(currentIntensity, boost);
+      running = true;
+      startSnow();
+      // small vibration feedback if available
+      try{ navigator.vibrate && navigator.vibrate(40); }catch(e){}
+      // clear recent history to avoid triggering again instantly
+      touchHistory = [];
+    }
+  }
+
+  // handle desktop mouse swipes too
+  let mouseDown = false;
+  canvas.addEventListener('mousedown', (e)=>{ mouseDown = true; onTouchStart(e); });
+  window.addEventListener('mouseup', ()=>{ if(mouseDown){ mouseDown=false; evaluateSwipes(); }});
+  canvas.addEventListener('mousemove', (e)=>{ if(mouseDown) onTouchMove(e); });
+
+  // touch listeners
+  canvas.addEventListener('touchstart', onTouchStart, {passive:false});
+  canvas.addEventListener('touchmove', onTouchMove, {passive:false});
+  canvas.addEventListener('touchend', (e)=>{ evaluateSwipes(); });
+
+  // Shake detection using DeviceMotion API
+  let lastAccel = {x:0,y:0,z:0};
+  let lastShakeTime = 0;
+  let shakeCount = 0;
+  const SHAKE_THRESHOLD = 18; // tune: higher = harder to trigger
+  const SHAKE_WINDOW_MS = 1200;
+  function handleMotion(event) {
+    const a = event.accelerationIncludingGravity || event.acceleration || {x:0,y:0,z:0};
+    if (!a) return;
+    const dx = a.x - lastAccel.x;
+    const dy = a.y - lastAccel.y;
+    const dz = a.z - lastAccel.z;
+    lastAccel = {x: a.x || 0, y: a.y || 0, z: a.z || 0};
+
+    const mag = Math.sqrt(dx*dx + dy*dy + dz*dz);
+    const now = Date.now();
+
+    if (mag > SHAKE_THRESHOLD) {
+      if (now - lastShakeTime < SHAKE_WINDOW_MS) {
+        shakeCount++;
+      } else {
+        shakeCount = 1;
+      }
+      lastShakeTime = now;
+
+      // if several shakes in window, trigger snow; more shakes increase intensity
+      if (shakeCount >= 1) {
+        const boost = Math.min(150, baseIntensity + shakeCount * 30);
+        currentIntensity = Math.max(currentIntensity, boost);
+        startSnow();
+        try{ navigator.vibrate && navigator.vibrate([30,20,30]); }catch(e){}
+      }
+    }
+  }
+
+  // Request permission on iOS when button pressed
+  async function requestMotionPermission() {
+    requestMotionBtn.disabled = true;
+    if (typeof DeviceMotionEvent !== 'undefined' && typeof DeviceMotionEvent.requestPermission === 'function') {
+      try {
+        const resp = await DeviceMotionEvent.requestPermission();
+        if (resp === 'granted') {
+          window.addEventListener('devicemotion', handleMotion);
+          hint.textContent = 'Motion enabled. Shake to trigger snow!';
+        } else {
+          hint.textContent = 'Motion permission denied. Use swipe to trigger snow.';
+        }
+      } catch (err) {
+        hint.textContent = 'Motion permission request failed. Use swipe to trigger snow.';
+      }
+    } else {
+      // non-iOS or older browsers
+      if ('ondevicemotion' in window) {
+        window.addEventListener('devicemotion', handleMotion);
+        hint.textContent = 'Motion enabled (browser). Shake to trigger snow!';
+      } else {
+        hint.textContent = 'No motion sensor available. Use swipe gestures.';
+      }
+    }
+    requestMotionBtn.disabled = false;
+  }
+  requestMotionBtn.addEventListener('click', requestMotionPermission);
+
+  // Fallback: start RAF loop even if nothing started so we can decay intensity gracefully
+  lastTime = performance.now();
+  animationFrameId = requestAnimationFrame(drawFrame);
+
+  // If user clicks canvas repeatedly quickly, treat as an alternate "shake"
+  let tapTimes = [];
+  canvas.addEventListener('click', (e)=>{
+    const now = Date.now();
+    tapTimes.push(now);
+    tapTimes = tapTimes.filter(t => now - t < 800);
+    if (tapTimes.length >= 4) {
+      currentIntensity = Math.max(currentIntensity, baseIntensity + tapTimes.length*20);
+      startSnow();
+      tapTimes = [];
+    }
+  });
+
+  // initial instructions when loaded
+  setTimeout(()=>{ hint.style.opacity = 0.95; }, 600);
+
+  // helper draw for initial frame when image loaded
+  function drawFrameOnce() {
+    if (imageLoaded) {
+      ctx.clearRect(0,0,canvas.width,canvas.height);
+      const w = canvas.clientWidth; const h = canvas.clientHeight;
+      const iw = bgImage.naturalWidth; const ih = bgImage.naturalHeight;
+      const scale = Math.max(w/iw, h/ih);
+      ctx.drawImage(bgImage, (w-iw*scale)/2, (h-ih*scale)/2, iw*scale, ih*scale);
+    } else {
+      ctx.fillStyle = '#061226';
+      ctx.fillRect(0,0,canvas.clientWidth,canvas.clientHeight);
+    }
+  }
+
+  function drawFrame() {/* kept for scope completeness; actual implementation above */ }
+  // initial sizing and draw
+  fitCanvas();
+  drawFrameOnce();
+
+  // Expose some debugging / controls if needed via console:
+  window.__snowGlobe = {
+    setIntensity(v){ baseIntensity = v; currentIntensity = v; },
+    start: startSnow,
+    stop: stopSnow
+  };
+
+})();
+</script>
+</body>
+</html>
