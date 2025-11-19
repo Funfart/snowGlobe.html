@@ -1,228 +1,211 @@
-<!doctype html>
+<!DOCTYPE html>
 <html lang="en">
 <head>
-<meta charset="utf-8"/>
-<meta name="viewport" content="width=device-width,initial-scale=1.0,viewport-fit=cover"/>
-<title>Snow Globe Viewer</title>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Snow Globe App</title>
+
 <style>
-  :root{
-    --bg:#0b1220;
-    --ui-bg: rgba(255,255,255,0.06);
-    --accent: #9ad4ff;
-  }
-  html,body{height:100%;margin:0;background:var(--bg);color:#fff;font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial;}
-  .container{display:flex;flex-direction:column;height:100vh;align-items:center;justify-content:center;padding:8px;box-sizing:border-box;}
-  .globe-wrap{width:100%;max-width:900px;aspect-ratio:3/2;position:relative;border-radius:18px;overflow:hidden;box-shadow:0 10px 30px rgba(0,0,0,0.6), inset 0 1px 0 rgba(255,255,255,0.02);}
-  canvas{width:100%;height:100%;display:block;touch-action:none}
-  .ui{
-    position:absolute;left:8px;top:8px;display:flex;gap:8px;align-items:center;backdrop-filter: blur(6px);
-  }
-  .btn{
-    background:var(--ui-bg);border:1px solid rgba(255,255,255,0.06);padding:6px 10px;border-radius:10px;color:#fff;font-size:14px;
-  }
-  .info{
-    position:absolute;right:8px;bottom:8px;background:linear-gradient(180deg, rgba(0,0,0,0.3), rgba(255,255,255,0.02));
-    padding:6px 10px;border-radius:10px;font-size:13px;color:#dfefff;opacity:0.9;
-  }
-  .slider{width:110px}
-  @media (max-width:480px){
-    .globe-wrap{border-radius:14px}
-    .btn{padding:6px 8px;font-size:13px}
-  }
+    body {
+        margin: 0;
+        background: #000;
+        display: flex;
+        justify-content: center;
+        align-items: center;
+        height: 100vh;
+    }
+
+    #globeWrapper {
+        position: relative;
+        width: 90vw;
+        height: 90vw;
+        max-width: 500px;
+        max-height: 500px;
+        border-radius: 50%;
+        overflow: hidden;
+        border: 10px solid rgba(255,255,255,0.4);
+        box-shadow: 0 0 40px rgba(255,255,255,0.3) inset;
+    }
+
+    canvas {
+        width: 100%;
+        height: 100%;
+        display: block;
+    }
 </style>
 </head>
 <body>
-<div class="container">
-  <div class="globe-wrap" id="globeWrap">
-    <canvas id="globe"></canvas>
 
-    <div class="ui" id="topUI">
-      <button class="btn" id="toggleSnow">Start Snow</button>
-      <label class="btn" title="Snow intensity">
-        Intensity
-        <input id="intensity" class="slider" type="range" min="0" max="100" value="40" />
-      </label>
-      <button class="btn" id="requestMotion">Enable Motion</button>
-    </div>
-
-    <div class="info" id="hint">Swipe left/right repeatedly or shake device to trigger snow.</div>
-  </div>
+<div id="globeWrapper">
+    <canvas id="globeCanvas"></canvas>
 </div>
 
 <script>
-// ===============================
-// MAIN SNOW GLOBE LOGIC
-// ===============================
-(() => {
+// ==========================================================
+// CONFIG
+// ==========================================================
+const PARTICLE_COUNT = 200;  // finite amount
+const SHAKE_FORCE = 2.5;
+const SWIPE_FORCE = 3.0;
+const SETTLE_SPEED = 0.03;
+const GRAVITY = 0.05;
 
-  const canvas = document.getElementById('globe');
-  const ctx = canvas.getContext('2d');
-  const wrap = document.getElementById('globeWrap');
-  const toggleBtn = document.getElementById('toggleSnow');
-  const intensityRange = document.getElementById('intensity');
-  const requestMotionBtn = document.getElementById('requestMotion');
-  const hint = document.getElementById('hint');
+let canvas = document.getElementById("globeCanvas");
+let ctx = canvas.getContext("2d");
 
-  // ---------------------------
-  // Background image
-  // ---------------------------
-  const bgImage = new Image();
-  bgImage.src = "image1.png";     // <— REPLACE WITH YOUR IMAGE FILE
-  let imageLoaded = false;
-  bgImage.onload = () => {
-    imageLoaded = true;
-    fitCanvas();
-  };
+canvas.width = canvas.offsetWidth;
+canvas.height = canvas.offsetHeight;
 
-  // ---------------------------
-  // Canvas scaling
-  // ---------------------------
-  function fitCanvas() {
-    const rect = wrap.getBoundingClientRect();
-    const dpr = Math.min(window.devicePixelRatio || 1, 2);
-    canvas.width = rect.width * dpr;
-    canvas.height = rect.height * dpr;
-    canvas.style.width = rect.width + "px";
-    canvas.style.height = rect.height + "px";
-    ctx.scale(dpr, dpr);
-  }
-  window.addEventListener("resize", fitCanvas);
+let W = canvas.width;
+let H = canvas.height;
 
-  // ---------------------------
-  // Snow particle system
-  // ---------------------------
-  let particles = [];
-  let running = false;
-  let baseIntensity = 40;
-  let currentIntensity = 0;
-  let lastTime = performance.now();
+// ==========================================================
+// LOAD BACKGROUND IMAGE
+// ==========================================================
+let background = new Image();
+background.src = "image1.png";
 
-  function spawnParticle() {
-    particles.push({
-      x: Math.random() * canvas.clientWidth,
-      y: -10,
-      vy: 1 + Math.random() * 3,
-      vx: (Math.random() - 0.5) * 1.2,
-      size: 1 + Math.random() * 3,
+// ==========================================================
+// PARTICLE CLASS
+// ==========================================================
+class Particle {
+    constructor() {
+        this.reset();
+    }
+
+    reset() {
+        this.x = Math.random() * W;
+        this.y = Math.random() * H;
+        this.vx = 0;
+        this.vy = 0;
+        this.size = Math.random() * 2 + 1; // glitter size
+        this.settled = false;
+    }
+
+    applyForce(fx, fy) {
+        this.vx += fx;
+        this.vy += fy;
+        this.settled = false;
+    }
+
+    update() {
+        if (!this.settled) {
+            this.vy += GRAVITY;
+
+            // movement
+            this.x += this.vx;
+            this.y += this.vy;
+
+            // drag
+            this.vx *= 0.98;
+            this.vy *= 0.98;
+        }
+
+        // collision with bottom (settling)
+        if (this.y > H - this.size) {
+            this.y = H - this.size;
+            this.vx *= 0.4;
+            this.vy = 0;
+
+            // particle settles gradually
+            if (Math.abs(this.vx) < 0.01) {
+                this.settled = true;
+            }
+        }
+
+        // walls
+        if (this.x < 0) { this.x = 0; this.vx *= -0.5; }
+        if (this.x > W) { this.x = W; this.vx *= -0.5; }
+    }
+
+    draw() {
+        ctx.fillStyle = "white";
+        ctx.beginPath();
+        ctx.arc(this.x, this.y, this.size, 0, Math.PI * 2);
+        ctx.fill();
+    }
+}
+
+// ==========================================================
+// CREATE PARTICLES
+// ==========================================================
+let particles = [];
+for (let i = 0; i < PARTICLE_COUNT; i++) {
+    particles.push(new Particle());
+}
+
+// ==========================================================
+// SWIPE DETECTION
+// ==========================================================
+let lastX = null;
+let swipeEnergy = 0;
+
+canvas.addEventListener("touchmove", e => {
+    let touch = e.touches[0];
+    if (lastX !== null) {
+        let dx = touch.clientX - lastX;
+
+        // repeated swipe left/right
+        swipeEnergy += Math.abs(dx) * 0.01;
+
+        if (swipeEnergy > 1) triggerSwirl(SWIPE_FORCE);
+    }
+    lastX = touch.clientX;
+});
+
+canvas.addEventListener("touchend", () => {
+    lastX = null;
+    swipeEnergy = 0;
+});
+
+// ==========================================================
+// SHAKE DETECTION (ACCELEROMETER)
+// ==========================================================
+if (window.DeviceMotionEvent) {
+    window.addEventListener("devicemotion", e => {
+        let shake =
+            Math.abs(e.acceleration.x) +
+            Math.abs(e.acceleration.y) +
+            Math.abs(e.acceleration.z);
+
+        if (shake > 22) {  // threshold
+            triggerSwirl(SHAKE_FORCE);
+        }
     });
-  }
+}
 
-  function updateParticles() {
-    particles = particles.filter(p => p.y < canvas.clientHeight + 20);
+// ==========================================================
+// SWIRL EFFECT
+// ==========================================================
+function triggerSwirl(force) {
     particles.forEach(p => {
-      p.y += p.vy;
-      p.x += p.vx;
+        let angle = Math.random() * Math.PI * 2;
+        p.vx += Math.cos(angle) * force;
+        p.vy += Math.sin(angle) * force;
+        p.settled = false;
     });
-  }
+}
 
-  function drawParticles() {
-    ctx.fillStyle = "white";
+// ==========================================================
+// MAIN ANIMATION LOOP
+// ==========================================================
+function loop() {
+    ctx.clearRect(0, 0, W, H);
+
+    // background
+    ctx.drawImage(background, 0, 0, W, H);
+
+    // update particles
     particles.forEach(p => {
-      ctx.beginPath();
-      ctx.arc(p.x, p.y, p.size, 0, Math.PI * 2);
-      ctx.fill();
+        p.update();
+        p.draw();
     });
-  }
 
-  // ---------------------------
-  // MASTER DRAW FRAME
-  // ---------------------------
-  function drawFrame() {
-    const now = performance.now();
-    const dt = now - lastTime;
-    lastTime = now;
+    requestAnimationFrame(loop);
+}
 
-    // Background
-    if (imageLoaded) {
-      const w = canvas.clientWidth;
-      const h = canvas.clientHeight;
-      const iw = bgImage.width;
-      const ih = bgImage.height;
-      const scale = Math.max(w / iw, h / ih);
-      const sw = iw * scale;
-      const sh = ih * scale;
-      ctx.drawImage(bgImage, (w - sw) / 2, (h - sh) / 2, sw, sh);
-    } else {
-      ctx.fillStyle = "#000";
-      ctx.fillRect(0, 0, canvas.width, canvas.height);
-    }
+background.onload = loop;
 
-    // Snow intensity decay
-    currentIntensity *= 0.97;
-
-    // Spawn based on intensity
-    if (running || currentIntensity > 1) {
-      let spawnCount = currentIntensity * 0.2;
-      for (let i = 0; i < spawnCount; i++) spawnParticle();
-      updateParticles();
-      drawParticles();
-    }
-
-    requestAnimationFrame(drawFrame);
-  }
-  requestAnimationFrame(drawFrame);
-
-  // ---------------------------
-  // Button actions
-  // ---------------------------
-  toggleBtn.onclick = () => {
-    running = !running;
-    toggleBtn.textContent = running ? "Stop Snow" : "Start Snow";
-  };
-
-  intensityRange.oninput = e => {
-    baseIntensity = parseInt(e.target.value);
-  };
-
-  // ---------------------------
-  // Swipe detection
-  // ---------------------------
-  let lastX = 0;
-  let swipeCount = 0;
-  canvas.addEventListener("touchmove", (e) => {
-    const x = e.touches[0].clientX;
-    if (Math.abs(x - lastX) > 25) {
-      swipeCount++;
-      lastX = x;
-      if (swipeCount > 4) {
-        currentIntensity = baseIntensity + swipeCount * 5;
-        running = true;
-      }
-    }
-  });
-  canvas.addEventListener("touchend", () => {
-    swipeCount = 0;
-  });
-
-  // ---------------------------
-  // Shake detection (optional)
-  // ---------------------------
-  function handleMotion(e) {
-    const a = e.accelerationIncludingGravity;
-    if (!a) return;
-    const magnitude = Math.abs(a.x) + Math.abs(a.y) + Math.abs(a.z);
-
-    if (magnitude > 28) {
-      currentIntensity = baseIntensity + (magnitude * 2);
-      running = true;
-      navigator.vibrate?.(40);
-    }
-  }
-
-  requestMotionBtn.onclick = async () => {
-    if (DeviceMotionEvent?.requestPermission) {
-      const p = await DeviceMotionEvent.requestPermission();
-      if (p === "granted") {
-        window.addEventListener("devicemotion", handleMotion);
-        hint.textContent = "Motion enabled — shake device!";
-      }
-    } else {
-      window.addEventListener("devicemotion", handleMotion);
-      hint.textContent = "Motion enabled (browser).";
-    }
-  };
-
-})();
 </script>
 </body>
 </html>
