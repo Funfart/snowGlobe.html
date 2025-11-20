@@ -1,510 +1,296 @@
-<!doctype html>
+<!DOCTYPE html>
 <html lang="en">
 <head>
-<meta charset="utf-8"/>
-<meta name="viewport" content="width=device-width,initial-scale=1.0,viewport-fit=cover"/>
-<title>Snow Globe — Fixed Gestures + Tutorial</title>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Snow Globe NFT — Fixed Spin + Flip</title>
 <style>
-  :root{ --bg:#041022; --hint:#dfefff; }
-  html,body{height:100%;margin:0;background:var(--bg);display:flex;align-items:center;justify-content:center;font-family:system-ui,Arial;}
-  #globeWrap{width:92vw;max-width:520px;aspect-ratio:1/1;border-radius:50%;overflow:hidden;border:10px solid rgba(255,255,255,0.12);box-shadow:0 20px 50px rgba(0,0,0,0.6) inset;position:relative;background:#02101a}
-  canvas{display:block;width:100%;height:100%;}
-  /* Tutorial overlay - DOES NOT BLOCK TOUCHES (pointer-events:none) so gestures pass through */
-  #tutorial{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;pointer-events:none}
-  .tcard{width:70%;max-width:320px;background:linear-gradient(180deg, rgba(255,255,255,0.03), rgba(255,255,255,0.02));border-radius:14px;padding:18px;text-align:center;color:var(--hint);backdrop-filter: blur(6px);box-shadow:0 6px 18px rgba(0,0,0,0.6);transform-origin:center;pointer-events:none}
-  .title{font-size:18px;margin-bottom:8px}
-  .hint{font-size:13px;opacity:0.95}
-  .hand{width:72px;height:72px;margin:12px auto 6px;position:relative}
-  .finger{width:18px;height:26px;border-radius:12px;background:rgba(255,255,255,0.9);position:absolute;left:27px;top:8px;transform-origin:center top;animation: tap 1000ms infinite;box-shadow:0 1px 0 rgba(0,0,0,0.12)}
-  .finger::after{content:'';position:absolute;left:-26px;top:24px;width:60px;height:10px;border-radius:8px;background:linear-gradient(90deg, rgba(255,255,255,0.06), rgba(255,255,255,0.02))}
-  @keyframes tap{0%{transform:translateX(-20px) rotate(-12deg);opacity:0.92}30%{transform:translateX(-2px) rotate(-4deg);opacity:1}60%{transform:translateX(20px) rotate(6deg);opacity:0.96}100%{transform:translateX(-20px) rotate(-12deg);opacity:0.92}}
-  /* confetti pieces */
-  #confetti{position:absolute;inset:0;pointer-events:none;overflow:hidden}
-  .confetti-piece{position:absolute;width:8px;height:12px;border-radius:2px;opacity:0.95;transform-origin:center center}
-  /* mini hint */
-  #miniHint{position:absolute;left:12px;bottom:12px;color:var(--hint);font-size:12px;opacity:0.9;pointer-events:none}
+  html,body {
+    margin:0; padding:0; background:#000;
+    display:flex; justify-content:center; align-items:center;
+    height:100vh; overflow:hidden;
+    touch-action: none;
+  }
+  #globeWrapper {
+    position: relative;
+    width: 90vw; max-width:500px;
+    aspect-ratio:1/1;
+    border-radius:50%;
+    overflow:hidden;
+    border:10px solid rgba(255,255,255,0.4);
+    box-shadow:0 0 40px rgba(255,255,255,0.3) inset;
+  }
+  canvas {
+    width:100%; height:100%; display:block;
+  }
+  #tutorial {
+    position:absolute; top:0; left:0; width:100%; height:100%;
+    display:flex; justify-content:center; align-items:center;
+    pointer-events:none; color:white; font-family:sans-serif;
+    font-size:1.2rem; text-align:center;
+  }
+  #swipeArrow {
+    margin-top:1em; font-size:2rem; animation: swipeAnim 1s infinite alternate;
+  }
+  @keyframes swipeAnim {
+    0%{ transform: translateX(-10px); }
+    100%{ transform: translateX(10px); }
+  }
 </style>
 </head>
 <body>
-  <div id="globeWrap" role="img" aria-label="Interactive snow globe">
-    <canvas id="globe"></canvas>
-
-    <div id="tutorial" aria-hidden="false">
-      <div class="tcard" id="tcard" aria-hidden="true">
-        <div class="hand"><div class="finger"></div></div>
-        <div class="title">Swipe Snow-Globe</div>
-        <div class="hint">Swipe left & right or shake your device to wake the snow. Tap to add sparkles. Flip phone to invert gravity.</div>
-      </div>
-    </div>
-
-    <div id="confetti" aria-hidden="true"></div>
-    <div id="miniHint">Tip: flip your device to invert gravity</div>
+<div id="globeWrapper">
+  <canvas id="globeCanvas"></canvas>
+  <div id="tutorial">
+    Swipe Snow Globe <div id="swipeArrow">⇆</div>
   </div>
+</div>
 
 <script>
-/* Full fixed single-file Snow Globe
-   - gestures work during tutorial (tutorial overlay doesn't block touches)
-   - swipes/shakes remove tutorial and trigger confetti
-   - supports device flip to invert gravity
-   - circular physics for image1 and particles inside globe
-   - responsive & mobile-friendly
-*/
-
-/* ---------- CONFIG ---------- */
-const BG_CID = 'bafybeiepec62olvujw52tbntuaryuyoiofjjz7s246hmethykvgfbnls34';
-const OBJ_CID = 'bafybeihnyoiyxsrzicx23funhiiwijfl55twsls6bsn4ypc2ybxyh7ucc4';
+// =================== CONFIG ===================
 const PARTICLE_COUNT = 400;
-const GRAVITY_BASE = 0.05;
-const OBJECT_HEAVIER = 1.5;
-const SWIRL_FORCE = 2.8;
-const CONFETTI_COUNT = 42;
+const SHAKE_FORCE = 2.5;
+const SWIPE_FORCE = 3.0;
+const GRAVITY = 0.05;
+let gravitySign = 1;
 
-/* ---------- DOM ---------- */
-const wrap = document.getElementById('globeWrap');
-const canvas = document.getElementById('globe');
-const ctx = canvas.getContext('2d');
-const tutorial = document.getElementById('tutorial');
-const tcard = document.getElementById('tcard');
-const confettiLayer = document.getElementById('confetti');
-const miniHint = document.getElementById('miniHint');
+// =================== CANVAS ===================
+const canvas = document.getElementById("globeCanvas");
+const ctx = canvas.getContext("2d");
+let W=0,H=0,globeRadius=0,CX=0,CY=0;
 
-let DPR = Math.min(window.devicePixelRatio || 1, 2);
-let W = 0, H = 0, CX = 0, CY = 0, R = 0;
-let particles = [], snowObj = null;
-let last = performance.now();
-let gravitySign = 1; // 1 normal, -1 inverted
-let started = false;
-let tutorialShown = true;
-
-/* ---------- HiDPI & resize ---------- */
-function resize(){
-  const cssW = wrap.clientWidth, cssH = wrap.clientHeight;
-  DPR = Math.min(window.devicePixelRatio || 1, 2);
-  canvas.style.width = cssW + 'px';
-  canvas.style.height = cssH + 'px';
-  canvas.width = Math.round(cssW * DPR);
-  canvas.height = Math.round(cssH * DPR);
-  ctx.setTransform(DPR,0,0,DPR,0,0);
-  W = cssW; H = cssH; CX = W/2; CY = H/2; R = Math.min(W,H)/2 - 8;
-  // ensure inside constraints
-  if (particles) for (let p of particles) p.ensureInside && p.ensureInside();
-  if (snowObj) snowObj.rescale && snowObj.rescale();
+function resizeCanvas(){
+    W = canvas.clientWidth;
+    H = canvas.clientHeight;
+    canvas.width = W;
+    canvas.height = H;
+    globeRadius = W/2 - 10;
+    CX=W/2; CY=H/2;
+    if(snowObject) snowObject.reset();
+    particles.forEach(p=>p.reset());
 }
-window.addEventListener('resize', resize);
-resize();
+window.addEventListener("resize", resizeCanvas);
 
-/* ---------- Images ---------- */
-const bg = new Image(); bg.crossOrigin='anonymous'; bg.src = 'https://ipfs.io/ipfs/' + BG_CID;
-const objImg = new Image(); objImg.crossOrigin='anonymous'; objImg.src = 'https://ipfs.io/ipfs/' + OBJ_CID;
+// =================== IMAGES ===================
+const BG_CID = "bafybeiepec62olvujw52tbntuaryuyoiofjjz7s246hmethykvgfbnls34";
+const OBJ_CID = "bafybeihnyoiyxsrzicx23funhiiwijfl55twsls6bsn4ypc2ybxyh7ucc4";
 
-/* ---------- Utils ---------- */
-const rand = (a,b)=> Math.random()*(b-a)+a;
+const background = new Image();
+background.src = "https://ipfs.io/ipfs/"+BG_CID;
+const snowImg = new Image();
+snowImg.src = "https://ipfs.io/ipfs/"+OBJ_CID;
 
-/* ---------- Particle Class ---------- */
-class Particle {
-  constructor(){ this.reset(true); }
-  reset(initial=true){
-    const a = Math.random()*Math.PI*2;
-    const r = Math.sqrt(Math.random()) * (R * 0.92);
-    this.x = CX + Math.cos(a)*r;
-    this.y = CY + Math.sin(a)*r;
-    this.vx = (Math.random()-0.5)*0.5;
-    this.vy = (Math.random()-0.5)*0.5;
-    this.size = rand(0.8,2.2);
-    this.alpha = rand(0.4,0.95);
-    this.settled = false;
-  }
-  applyForce(fx,fy){ this.vx += fx; this.vy += fy; this.settled = false; }
-  update(dt, g){
-    if (!this.settled){
-      this.vy += g * dt * 60;
-      this.x += this.vx * dt * 60;
-      this.y += this.vy * dt * 60;
-      this.vx *= 0.987; this.vy *= 0.987;
+// =================== SNOW OBJECT ===================
+class SnowObject{
+    constructor(img){
+        this.img = img;
+        this.reset();
     }
-    this.ensureInside();
-  }
-  ensureInside(){
-    const dx = this.x - CX, dy = this.y - CY;
-    const d = Math.hypot(dx,dy);
-    if (d > R - 1){
-      const nx = dx/d, ny = dy/d;
-      this.x = CX + nx * (R - 1);
-      this.y = CY + ny * (R - 1);
-      const dot = this.vx*nx + this.vy*ny;
-      this.vx -= 1.5 * dot * nx;
-      this.vy -= 1.5 * dot * ny;
-      this.vx *= 0.88; this.vy *= 0.88;
-      if (Math.abs(this.vx) < 0.01 && Math.abs(this.vy) < 0.01) this.settled = true;
+    reset(){
+        this.x=CX; this.y=CY - globeRadius*0.3;
+        this.vx=0; this.vy=0; this.settled=false;
+        this.angle=0;
+        this.angularVelocity=0;
+        let scale = 0.25*(W/500);
+        this.width = this.img.width*scale;
+        this.height = this.img.height*scale;
+        this.r = Math.max(this.width,this.height)/2;
     }
-  }
-  draw(){
-    ctx.globalAlpha = this.alpha;
-    ctx.fillStyle = '#fff';
-    ctx.beginPath();
-    ctx.arc(this.x, this.y, this.size, 0, Math.PI*2);
-    ctx.fill();
-    ctx.globalAlpha = 1;
-  }
+    applyForce(fx,fy){
+        this.vx+=fx; this.vy+=fy;
+        this.settled=false;
+        this.angularVelocity += (Math.random()-0.5)*0.02;
+    }
+    update(dt){
+        if(!this.settled){
+            this.vy += GRAVITY*gravitySign*dt*60;
+            this.x += this.vx*dt*60;
+            this.y += this.vy*dt*60;
+            this.angle += this.angularVelocity*dt*60;
+
+            // damping
+            this.vx *= 0.96;
+            this.vy *= 0.96;
+            this.angularVelocity *= 0.94;
+
+            // stop idle spin
+            const speed = Math.hypot(this.vx,this.vy);
+            if(speed<0.04 && Math.abs(this.angularVelocity)<0.003 && ((gravitySign>0 && this.y>CY) || (gravitySign<0 && this.y<CY))){
+                this.vx=0; this.vy=0; this.angularVelocity=0; this.settled=true;
+            }
+        }
+
+        // circle boundary collision
+        let dx = this.x-CX;
+        let dy = this.y-CY;
+        let d = Math.hypot(dx,dy);
+        let maxD = globeRadius - this.r;
+        if(d>maxD){
+            let nx=dx/d, ny=dy/d, overlap=d-maxD;
+            this.x -= nx*overlap*0.5; this.y -= ny*overlap*0.5;
+            const dot = this.vx*nx + this.vy*ny;
+            this.vx -= 1.35*dot*nx;
+            this.vy -= 1.35*dot*ny;
+        }
+    }
+    draw(){
+        ctx.save();
+        ctx.translate(this.x,this.y);
+        ctx.rotate(this.angle);
+        ctx.drawImage(this.img,-this.width/2,-this.height/2,this.width,this.height);
+        ctx.restore();
+    }
 }
+let snowObject;
 
-/* ---------- Snow Object (circular physics) ---------- */
-class SnowObject {
-  constructor(img){ this.img = img; this.rescale(); this.placeInitial(); }
-  rescale(){
-    const scale = (Math.min(W,H) / 500) * 0.25;
-    this.w = Math.max(8, this.img.width * scale);
-    this.h = Math.max(8, this.img.height * scale);
-    this.r = Math.max(this.w,this.h) * 0.45;
-  }
-  placeInitial(){
-    this.x = CX;
-    this.y = CY - R * 0.45;
-    this.vx = 0; this.vy = 0;
-    this.angle = 0; this.angularVelocity = 0;
-    this.settled = false;
-    this.ensureInside();
-  }
-  applyForce(fx,fy){
-    this.vx += fx; this.vy += fy;
-    this.angularVelocity += (Math.random()-0.5) * 0.03;
-    this.settled = false;
-  }
-  update(dt, g){
-    if (!this.settled){
-      this.vy += g * dt * 60 * OBJECT_HEAVIER;
-      this.x += this.vx * dt * 60;
-      this.y += this.vy * dt * 60;
-      this.angle += this.angularVelocity * dt * 60;
-      this.vx *= 0.96; this.vy *= 0.96; this.angularVelocity *= 0.98;
-      if (Math.abs(this.angularVelocity) < 0.0008) this.angularVelocity = 0;
+// =================== PARTICLES ===================
+class Particle{
+    constructor(){ this.reset(); }
+    reset(){
+        let ang=Math.random()*Math.PI*2;
+        let r=Math.random()*globeRadius*0.9;
+        this.x=CX+Math.cos(ang)*r;
+        this.y=CY+Math.sin(ang)*r;
+        this.vx=0; this.vy=0;
+        this.size=1+Math.random()*2;
+        this.settled=false;
     }
-    // soft rim collision
-    const dx = this.x - CX, dy = this.y - CY;
-    const dist = Math.hypot(dx,dy);
-    const max = R - this.r;
-    if (dist > max){
-      const nx = dx/dist, ny = dy/dist;
-      const overlap = dist - max;
-      this.x -= nx * overlap * 0.5;
-      this.y -= ny * overlap * 0.5;
-      const vDotN = this.vx*nx + this.vy*ny;
-      this.vx -= 1.2 * vDotN * nx;
-      this.vy -= 1.2 * vDotN * ny;
-      const tx = -ny, ty = nx;
-      const vDotT = this.vx*tx + this.vy*ty;
-      this.vx = (this.vx - vDotT*tx) * 0.86 + vDotT*tx;
-      this.vy = (this.vy - vDotT*ty) * 0.86 + vDotT*ty;
-      this.angularVelocity += (Math.sign(vDotT) || 1) * 0.02;
+    applyForce(fx,fy){ this.vx+=fx; this.vy+=fy; this.settled=false; }
+    update(dt){
+        if(!this.settled){
+            this.vy+=GRAVITY*gravitySign*dt*60;
+            this.x+=this.vx*dt*60; this.y+=this.vy*dt*60;
+            this.vx*=0.98; this.vy*=0.98;
+        }
+        let dx=this.x-CX, dy=this.y-CY, d=Math.hypot(dx,dy);
+        if(d>globeRadius){
+            let angle=Math.atan2(dy,dx);
+            this.x=CX+Math.cos(angle)*globeRadius;
+            this.y=CY+Math.sin(angle)*globeRadius;
+            this.vx*=-0.5; this.vy*=-0.5;
+            if(Math.abs(this.vx)<0.01 && Math.abs(this.vy)<0.01) this.settled=true;
+        }
     }
-    // settle
-    const bottomY = CY + R * 0.45;
-    const speed = Math.hypot(this.vx, this.vy);
-    if (!this.settled && this.y > bottomY && speed < 0.06 && Math.abs(this.angularVelocity) < 0.004){
-      this.vx = 0; this.vy = 0; this.angularVelocity = 0; this.settled = true;
+    draw(){ ctx.fillStyle="#fff"; ctx.beginPath(); ctx.arc(this.x,this.y,this.size,0,Math.PI*2); ctx.fill(); }
+}
+let particles = [];
+for(let i=0;i<PARTICLE_COUNT;i++) particles.push(new Particle());
+
+// =================== SWIPE & SHAKE ===================
+let tutorialActive=true;
+let lastX=null, swipeEnergy=0;
+
+function triggerSwirl(force){
+    particles.forEach(p=>{ 
+        let angle=Math.random()*Math.PI*2;
+        p.applyForce(Math.cos(angle)*force, Math.sin(angle)*force);
+    });
+    if(snowObject){
+        let angle=Math.random()*Math.PI*2;
+        snowObject.applyForce(Math.cos(angle)*force, Math.sin(angle)*force);
     }
-    this.ensureInside();
-  }
-  ensureInside(){
-    const dx = this.x - CX, dy = this.y - CY;
-    const dist = Math.hypot(dx,dy);
-    const max = Math.max(0, R - this.r);
-    if (dist > max){
-      const nx = dx/dist, ny = dy/dist;
-      this.x = CX + nx * max;
-      this.y = CY + ny * max;
-      this.vx *= 0.5; this.vy *= 0.5;
+    // Remove tutorial on first interaction
+    if(tutorialActive){
+        tutorialActive=false;
+        document.getElementById("tutorial").style.display="none";
+        showConfetti(50);
     }
-  }
-  draw(){
-    ctx.save();
-    ctx.translate(this.x, this.y);
-    ctx.rotate(this.angle);
-    ctx.drawImage(this.img, -this.w/2, -this.h/2, this.w, this.h);
-    ctx.restore();
-  }
 }
 
-/* ---------- Confetti helpers ---------- */
-function spawnConfettiBig(){
-  confettiLayer.innerHTML = '';
-  const colors = ['#ff4d6d','#ffd166','#6ee7b7','#9ad4ff','#b39cff'];
-  for (let i=0;i<CONFETTI_COUNT;i++){
-    const el = document.createElement('div');
-    el.className = 'confetti-piece';
-    const size = Math.round(rand(6,12));
-    el.style.width = size + 'px';
-    el.style.height = Math.round(size*1.4) + 'px';
-    el.style.left = (50 + rand(-25,25)) + '%';
-    el.style.top = '45%';
-    el.style.background = colors[i % colors.length];
-    confettiLayer.appendChild(el);
-    const start = performance.now();
-    const dur = rand(800,1400);
-    (function animate(now){
-      const t = Math.min(1, (now - start)/dur);
-      if (t >= 1){ el.remove(); return; }
-      const ease = Math.sin(t*Math.PI*0.5);
-      const dx = rand(-200,200) * ease;
-      const dy = -rand(160,320) * (1 - ease) + ease * 120;
-      const rot = rand(0,720) * (1 - t);
-      el.style.transform = `translate3d(${dx}px,${dy}px,0) rotate(${rot}deg)`;
-      requestAnimationFrame(animate);
-    })(performance.now());
-  }
-  setTimeout(()=>confettiLayer.innerHTML = '', 1800);
-}
-
-/* ---------- Interaction handling (fixed) ---------- */
-/* We attach gesture listeners to window so overlays never block them. */
-
-let lastTouchX = null;
-let swipeAccum = 0;
-
-function onPointerStart(e){
-  const x = (e.touches ? e.touches[0].clientX : e.clientX);
-  lastTouchX = x;
-}
-function onPointerMove(e){
-  const x = (e.touches ? e.touches[0].clientX : e.clientX);
-  if (lastTouchX !== null){
-    const dx = x - lastTouchX;
-    swipeAccum += Math.abs(dx) * 0.02;
-    if (tutorialShown){
-      // tiny visual poke
-      tcard.style.transform = `scale(${1 - Math.min(0.03, swipeAccum*0.02)})`;
+canvas.addEventListener("touchmove", e=>{
+    let touch = e.touches[0];
+    if(lastX!==null){
+        let dx = touch.clientX-lastX;
+        swipeEnergy += Math.abs(dx)*0.01;
+        if(swipeEnergy>1) triggerSwirl(SWIPE_FORCE);
     }
-    if (swipeAccum > 1.0){
-      activateFromUser();
-      applySwirl( SWIRL_FORCE * Math.min(2, swipeAccum) );
-      swipeAccum = 0;
-    }
-  }
-  lastTouchX = x;
-}
-function onPointerEnd(e){
-  lastTouchX = null;
-  swipeAccum = 0;
-}
-
-window.addEventListener('touchstart', onPointerStart, {passive:true});
-window.addEventListener('pointerdown', onPointerStart, {passive:true});
-window.addEventListener('touchmove', onPointerMove, {passive:true});
-window.addEventListener('pointermove', onPointerMove, {passive:true});
-window.addEventListener('touchend', onPointerEnd, {passive:true});
-window.addEventListener('pointerup', onPointerEnd, {passive:true});
-
-/* Click/tap burst */
-window.addEventListener('click', (e)=>{
-  activateFromUser();
-  const rect = wrap.getBoundingClientRect();
-  const cx = e.clientX - rect.left;
-  const cy = e.clientY - rect.top;
-  burstAt(cx, cy);
+    lastX = touch.clientX;
 });
+canvas.addEventListener("touchend", ()=>{ lastX=null; swipeEnergy=0; });
 
-/* Shake (devicemotion) */
-function handleMotion(e){
-  const a = e.accelerationIncludingGravity || e.acceleration || {x:0,y:0,z:0};
-  const mag = Math.abs(a.x||0) + Math.abs(a.y||0) + Math.abs(a.z||0);
-  if (mag > 20){
-    activateFromUser();
-    applySwirl( Math.min(6, mag/8) );
-  }
-}
-if (typeof DeviceMotionEvent !== 'undefined' && typeof DeviceMotionEvent.requestPermission === 'function'){
-  // request permission upon first touch (so it works in iOS)
-  window.addEventListener('touchstart', function requestOnce(){
-    DeviceMotionEvent.requestPermission().then(resp=>{
-      if (resp === 'granted') window.addEventListener('devicemotion', handleMotion);
-    }).catch(()=>{/* ignore */});
-    window.removeEventListener('touchstart', requestOnce);
-  }, { once:true });
-} else {
-  window.addEventListener('devicemotion', handleMotion);
+if(window.DeviceMotionEvent){
+    window.addEventListener("devicemotion", e=>{
+        const shake = Math.abs(e.acceleration.x)+Math.abs(e.acceleration.y)+Math.abs(e.acceleration.z);
+        if(shake>22) triggerSwirl(SHAKE_FORCE);
+
+        // Flip detection
+        const ag = e.accelerationIncludingGravity;
+        if(!ag) return;
+        const gZ = ag.z;
+        if(gZ < -7 && gravitySign !== -1){ gravitySign=-1; triggerSwirl(2); }
+        else if(gZ > 7 && gravitySign !== 1){ gravitySign=1; triggerSwirl(2); }
+    });
 }
 
-/* Orientation flip: use deviceorientation when available */
-function handleOrientation(e){
-  const beta = e.beta || 0;
-  if (Math.abs(beta) > 140){
-    if (gravitySign !== -1){
-      gravitySign = -1;
-      applyGlobalFlipImpulse();
+// =================== CONFETTI ===================
+let confetti = [];
+function showConfetti(count){
+    for(let i=0;i<count;i++){
+        confetti.push({
+            x: CX, y: CY,
+            vx: (Math.random()-0.5)*4, vy: (Math.random()-1.5)*4,
+            size: 2+Math.random()*2,
+            color: `hsl(${Math.random()*360},100%,70%)`
+        });
     }
-  } else {
-    if (gravitySign !== 1){
-      gravitySign = 1;
-      applyGlobalFlipImpulse();
-    }
-  }
 }
-if (typeof DeviceOrientationEvent !== 'undefined' && typeof DeviceOrientationEvent.requestPermission === 'function'){
-  window.addEventListener('touchstart', function reqOr(){
-    DeviceOrientationEvent.requestPermission().then(resp=>{
-      if (resp === 'granted') window.addEventListener('deviceorientation', handleOrientation);
-    }).catch(()=>{/* ignore */});
-    window.removeEventListener('touchstart', reqOr);
-  }, { once:true });
-} else {
-  window.addEventListener('deviceorientation', handleOrientation);
+function drawConfetti(dt){
+    confetti.forEach(c=>{
+        c.vy += GRAVITY*dt*60;
+        c.x+=c.vx*dt*60; c.y+=c.vy*dt*60;
+        ctx.fillStyle=c.color;
+        ctx.beginPath();
+        ctx.arc(c.x,c.y,c.size,0,Math.PI*2);
+        ctx.fill();
+    });
+    confetti = confetti.filter(c=>c.y<W+50);
 }
 
-/* fallback for screen orientation angle */
-setInterval(()=>{
-  const angle = (screen.orientation && screen.orientation.angle) || window.orientation || 0;
-  if (Math.abs(angle - 180) < 25){
-    if (gravitySign !== -1){ gravitySign = -1; applyGlobalFlipImpulse(); }
-  } else {
-    if (gravitySign !== 1){ gravitySign = 1; applyGlobalFlipImpulse(); }
-  }
-}, 1100);
+// =================== MAIN LOOP ===================
+function loop(){
+    ctx.clearRect(0,0,W,H);
 
-/* ---------- Activation flow ---------- */
-function activateFromUser(){
-  if (!started){
-    started = true;
-    if (tutorialShown){
-      tutorialShown = false;
-      // fade out tutorial
-      tcard.style.transition = 'opacity 300ms ease, transform 220ms ease';
-      tcard.style.opacity = 0;
-      tcard.style.transform = 'scale(0.96)';
-      setTimeout(()=> tutorial.remove(), 360);
-      // big confetti
-      spawnConfettiBig();
-    }
-  }
+    // Clip globe
+    ctx.save();
+    ctx.beginPath();
+    ctx.arc(CX,CY,globeRadius,0,Math.PI*2);
+    ctx.clip();
+
+    // Background
+    if(background.complete) ctx.drawImage(background,0,0,W,H);
+
+    // Snow object
+    if(snowObject){ snowObject.update(1/60); snowObject.draw(); }
+
+    // Particles
+    particles.forEach(p=>{ p.update(1/60); p.draw(); });
+
+    // Confetti
+    drawConfetti(1/60);
+
+    // Subtle glare
+    ctx.save();
+    ctx.globalAlpha=0.22;
+    let g=ctx.createRadialGradient(CX-globeRadius*0.4,CY-globeRadius*0.5,5,CX,CY,globeRadius*1.1);
+    g.addColorStop(0,"rgba(255,255,255,0.55)");
+    g.addColorStop(1,"rgba(255,255,255,0.0)");
+    ctx.fillStyle=g;
+    ctx.beginPath(); ctx.arc(CX,CY,globeRadius,0,Math.PI*2); ctx.fill();
+    ctx.restore();
+
+    ctx.restore();
+    requestAnimationFrame(loop);
 }
 
-/* ---------- Swirl / burst helpers ---------- */
-function applySwirl(force){
-  for (let p of particles){
-    const a = Math.random()*Math.PI*2;
-    p.applyForce(Math.cos(a)*force, Math.sin(a)*force * 0.6 * -gravitySign);
-  }
-  if (snowObj){
-    const a = Math.random()*Math.PI*2;
-    snowObj.applyForce(Math.cos(a)*force*1.6, Math.sin(a)*force*1.6 * -gravitySign);
-  }
+// =================== INIT ===================
+function startIfReady(){
+    if(background.complete && snowImg.complete){
+        resizeCanvas();
+        snowObject = new SnowObject(snowImg);
+        loop();
+    } else setTimeout(startIfReady,50);
 }
-function burstAt(cx,cy){
-  // cx,cy in client coords relative to wrap — convert to canvas coords
-  const rect = wrap.getBoundingClientRect();
-  const localX = cx;
-  const localY = cy;
-  for (let i=0;i<18;i++){
-    const idx = Math.floor(Math.random() * particles.length);
-    const p = particles[idx];
-    p.x = localX + (Math.random()-0.5) * 30;
-    p.y = localY + (Math.random()-0.5) * 30;
-    const a = Math.random()*Math.PI*2;
-    p.applyForce(Math.cos(a)*3, Math.sin(a)*3 * -gravitySign);
-  }
-  spawnConfettiShort(localX, localY);
-}
-function applyGlobalFlipImpulse(){
-  for (let p of particles) p.applyForce((Math.random()-0.5)*0.8, -gravitySign * rand(0.6,1.6));
-  if (snowObj) snowObj.applyForce((Math.random()-0.5)*1.6, -gravitySign * rand(0.9,2.6));
-}
-
-/* ---------- Confetti short (tap) ---------- */
-function spawnConfettiShort(cx,cy){
-  const colors = ['#ffd166','#ff4d6d','#9ad4ff','#b39cff','#6ee7b7'];
-  for (let i=0;i<18;i++){
-    const el = document.createElement('div');
-    el.className = 'confetti-piece';
-    const size = Math.round(rand(6,10));
-    el.style.width = size + 'px';
-    el.style.height = Math.round(size*1.4) + 'px';
-    el.style.left = (cx/wrap.clientWidth*100) + '%';
-    el.style.top = (cy/wrap.clientHeight*100) + '%';
-    el.style.background = colors[i % colors.length];
-    confettiLayer.appendChild(el);
-    const start = performance.now();
-    const dur = rand(600,1100);
-    (function anim(now){
-      const t = (now-start)/dur;
-      if (t > 1){ el.remove(); return; }
-      const ease = Math.sin(t*Math.PI*0.5);
-      const dx = rand(-80,80)*ease;
-      const dy = rand(-200,-60)*(1-ease) + ease*(80);
-      el.style.transform = `translate3d(${dx}px,${dy}px,0) rotate(${rand(0,360)}deg)`;
-      requestAnimationFrame(anim);
-    })(performance.now());
-  }
-}
-
-/* ---------- Main loop & startup ---------- */
-function initParticles(){
-  particles = [];
-  for (let i=0;i<PARTICLE_COUNT;i++) particles.push(new Particle(true));
-}
-
-let lastFrame = performance.now();
-function loop(nowTime){
-  const dt = Math.min(0.033, (nowTime - lastFrame)/1000);
-  lastFrame = nowTime;
-  const g = GRAVITY_BASE * gravitySign;
-
-  // update
-  for (let p of particles) p.update(dt, g);
-  if (snowObj) snowObj.update(dt, g);
-
-  // render
-  ctx.clearRect(0,0,canvas.width/DPR,canvas.height/DPR);
-
-  // background clipped to globe
-  ctx.save();
-  ctx.beginPath();
-  ctx.arc(CX, CY, R, 0, Math.PI*2);
-  ctx.clip();
-  if (bg.complete) ctx.drawImage(bg, 0, 0, W, H);
-  ctx.restore();
-
-  // draw object below particles
-  if (snowObj) snowObj.draw();
-
-  // particles
-  for (let p of particles) p.draw();
-
-  // glass glare
-  ctx.save();
-  ctx.globalAlpha = 0.22;
-  const g1 = ctx.createRadialGradient(CX - R*0.35, CY - R*0.45, 5, CX, CY, R*1.2);
-  g1.addColorStop(0, 'rgba(255,255,255,0.5)');
-  g1.addColorStop(1, 'rgba(255,255,255,0)');
-  ctx.fillStyle = g1;
-  ctx.beginPath(); ctx.arc(CX,CY,R,0,Math.PI*2); ctx.fill();
-  ctx.restore();
-
-  // chromatic rim
-  ctx.save();
-  ctx.lineWidth = Math.max(2, R*0.02);
-  ctx.strokeStyle = 'rgba(120,160,255,0.28)';
-  ctx.beginPath(); ctx.arc(CX,CY,R-2,0,Math.PI*2); ctx.stroke();
-  ctx.strokeStyle = 'rgba(190,130,255,0.22)';
-  ctx.lineWidth = Math.max(1, R*0.01);
-  ctx.beginPath(); ctx.arc(CX,CY,R-4,0,Math.PI*2); ctx.stroke();
-  ctx.restore();
-
-  requestAnimationFrame(loop);
-}
-
-/* ---------- Launch when images ready ---------- */
-function launchIfReady(){
-  if (!bg.complete || !objImg.complete) { setTimeout(launchIfReady,50); return; }
-  resize();
-  initParticles();
-  snowObj = new SnowObject(objImg);
-  snowObj.placeInitial();
-  lastFrame = performance.now();
-  requestAnimationFrame(loop);
-}
-bg.onload = launchIfReady;
-objImg.onload = launchIfReady;
-if (bg.complete && objImg.complete) launchIfReady();
-
+startIfReady();
 </script>
 </body>
 </html>
