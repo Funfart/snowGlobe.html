@@ -3,439 +3,266 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width,initial-scale=1.0,viewport-fit=cover" />
-<title>Snow Globe — Circular Physics</title>
+<title>Snow Globe — Fixed Rotation + Glare</title>
 <style>
-  :root{ --bg:#071226; }
-  html,body{height:100%;margin:0;background:var(--bg);display:flex;align-items:center;justify-content:center;}
-  #globeWrapper{
-    width:88vw; max-width:520px; aspect-ratio:1/1; border-radius:50%; overflow:hidden;
-    border:10px solid rgba(255,255,255,0.14); box-shadow:0 20px 50px rgba(0,0,0,0.6) inset;
-    background:transparent;
+  html,body{
+    margin:0; padding:0; background:#060b18;
+    display:flex; justify-content:center; align-items:center; height:100%;
   }
-  canvas{ width:100%; height:100%; display:block; -webkit-backface-visibility:hidden; image-rendering:optimizeSpeed; }
-  /* small UI hint (non-intrusive) */
-  #hint{ position:absolute; right:12px; bottom:12px; color:#dfefff; font-family:system-ui,Arial; font-size:12px; opacity:0.9; }
+  #globeWrapper{
+    width:88vw; max-width:520px; aspect-ratio:1/1;
+    border-radius:50%; overflow:hidden;
+    border:10px solid rgba(255,255,255,0.15);
+    box-shadow:0 20px 50px rgba(0,0,0,0.6) inset;
+  }
+  canvas{ width:100%; height:100%; display:block; }
 </style>
 </head>
 <body>
-  <div id="globeWrapper" aria-hidden="true">
-    <canvas id="globeCanvas"></canvas>
-  </div>
-  <div id="hint" style="display:none">Swipe or shake phone to swirl snow</div>
+<div id="globeWrapper">
+  <canvas id="globeCanvas"></canvas>
+</div>
 
 <script>
-/* Snow Globe — Circular physics full build
-   - Background CID (bg.png)
-   - Snow object CID (image1.png)
-   - Circular physics hitbox (prevents border-sticking)
-   - Soft collision + tangential slide toward bottom
-   - 400 particles (mobile-friendly)
-   - Touch swipe + accelerometer (iOS permission flow handled)
-   - Responsive & high-DPI canvas
-*/
+/* ======================================================
+   Snow Globe — Circular Physics + FIXED ROTATION + GLARE
+   ====================================================== */
 
-// ----------------- CONFIG -----------------
+const BG_CID = "bafybeiepec62olvujw52tbntuaryuyoiofjjz7s246hmethykvgfbnls34";
+const OBJ_CID = "bafybeigftb6innx7vd42qicjuhntoxlegfup2rpqu3flruilqinnvw2nae";
+
 const PARTICLE_COUNT = 400;
-const SHAKE_THRESHOLD = 18;        // device motion sensitivity
-const SWIPE_TRIGGER_ENERGY = 1.0;
-const PARTICLE_GRAVITY = 0.04;
-const OBJECT_GRAVITY = 0.16;       // heavier than particles
-const DAMPING = 0.985;
-const OBJECT_DAMPING = 0.96;
-const CIRCLE_SCALE = 0.25;         // base scale of image1 relative to original, then scaled by canvas
-const BG_CID = 'bafybeiepec62olvujw52tbntuaryuyoiofjjz7s246hmethykvgfbnls34';
-const OBJ_CID = 'bafybeihnyoiyxsrzicx23funhiiwijfl55twsls6bsn4ypc2ybxyh7ucc4';
+const OBJ_GRAVITY = 0.16;
+const OBJ_DAMP = 0.96;
 
-// ----------------- DOM -----------------
-const canvas = document.getElementById('globeCanvas');
-const ctx = canvas.getContext('2d', { alpha: true });
-const wrapper = document.getElementById('globeWrapper');
-const hint = document.getElementById('hint');
+let W=0,H=0;
+let globeRadius=0;
+let center={x:0,y:0};
 
-// HiDPI handling
-function setCanvasSize(){
-  const cssW = wrapper.clientWidth;
-  const cssH = wrapper.clientHeight;
-  const dpr = Math.min(window.devicePixelRatio || 1, 2);
-  canvas.style.width = cssW + 'px';
-  canvas.style.height = cssH + 'px';
-  canvas.width = Math.round(cssW * dpr);
-  canvas.height = Math.round(cssH * dpr);
+const canvas=document.getElementById("globeCanvas");
+const ctx=canvas.getContext("2d");
+
+function resize(){
+  const w=canvas.parentElement.clientWidth;
+  const h=canvas.parentElement.clientHeight;
+  const dpr=Math.min(window.devicePixelRatio||1,2);
+
+  canvas.width=w*dpr;
+  canvas.height=h*dpr;
+  canvas.style.width=w+"px";
+  canvas.style.height=h+"px";
   ctx.setTransform(dpr,0,0,dpr,0,0);
-  // update geometry
-  W = cssW;
-  H = cssH;
-  globeCenter.x = W/2; globeCenter.y = H/2;
-  globeRadius = Math.min(W,H)/2 - 8; // keep inside border
-  if (snowObj) snowObj.rescale(); // ensure object rescales immediately
-  // resample particles positions to remain inside globe
+
+  W=w; H=h;
+  center.x=W/2; center.y=H/2;
+  globeRadius=Math.min(W,H)/2 - 8;
 }
-window.addEventListener('resize', ()=>{
-  setCanvasSize();
-  // reinitialize safe placement for particles and object
-  if (!started) return;
-  for (let p of particles) p.constrainInside();
-  if (snowObj) snowObj.ensureInside();
-});
+resize();
+window.addEventListener("resize",resize);
 
-// ----------------- Scene state -----------------
-let W = 0, H = 0;
-let globeCenter = { x:0, y:0 };
-let globeRadius = 0;
-let particles = [];
-let snowObj = null;
-let started = false;
 
-// ----------------- Load images (background + object) -----------------
-const bgImg = new Image();
-bgImg.crossOrigin = 'anonymous';
-bgImg.src = `https://ipfs.io/ipfs/${BG_CID}`;
+// ---------------- IMAGES ----------------
+const bgImg=new Image();
+bgImg.src="https://ipfs.io/ipfs/"+BG_CID;
 
-const objImg = new Image();
-objImg.crossOrigin = 'anonymous';
-objImg.src = `https://ipfs.io/ipfs/${OBJ_CID}`;
+const objImg=new Image();
+objImg.src="https://ipfs.io/ipfs/"+OBJ_CID;
 
-// ----------------- Particle implementation -----------------
-class Particle {
+
+// ---------------- PARTICLES ----------------
+class Particle{
   constructor(){
-    this.reset(true);
+    this.reset();
   }
-  reset(initial=false){
-    // place randomly inside globe (polar coordinates)
-    const a = Math.random()*Math.PI*2;
-    const r = Math.sqrt(Math.random()) * (globeRadius * 0.9);
-    this.x = globeCenter.x + Math.cos(a)*r;
-    this.y = globeCenter.y + Math.sin(a)*r;
-    // start with gentle upward drift (floating)
-    this.vx = (Math.random()-0.5)*0.6;
-    this.vy = (Math.random()-0.6)*0.6;
-    this.size = 0.8 + Math.random()*2.2;
-    this.alpha = 0.6 + Math.random()*0.4;
-    this.settled = false;
-    if (!initial) this.constrainInside();
-  }
-  applyForce(fx, fy){
-    this.vx += fx; this.vy += fy; this.settled = false;
+  reset(){
+    const ang=Math.random()*Math.PI*2;
+    const r=Math.sqrt(Math.random())*(globeRadius*0.9);
+    this.x=center.x+Math.cos(ang)*r;
+    this.y=center.y+Math.sin(ang)*r;
+    this.vx=(Math.random()-.5)*0.3;
+    this.vy=(Math.random()-.5)*0.3;
+    this.size=1+Math.random()*2;
+    this.alpha=0.5+Math.random()*0.5;
   }
   update(dt){
-    if (!this.settled){
-      this.vy += PARTICLE_GRAVITY * dt * 60;
-      this.x += this.vx * dt * 60;
-      this.y += this.vy * dt * 60;
-      this.vx *= DAMPING;
-      this.vy *= DAMPING;
-    }
-    this.constrainInside();
-  }
-  constrainInside(){
-    // Keep particle inside globe; reflect softly if outside
-    const dx = this.x - globeCenter.x;
-    const dy = this.y - globeCenter.y;
-    const dist = Math.hypot(dx,dy);
-    if (dist > globeRadius - 1){
-      const nX = dx / dist, nY = dy / dist;
-      // push back inside
-      this.x = globeCenter.x + nX * (globeRadius - 1);
-      this.y = globeCenter.y + nY * (globeRadius - 1);
-      // reflect/tumble
-      // project velocity on normal and tangent
-      const vDotN = this.vx*nX + this.vy*nY;
-      this.vx -= 1.6 * vDotN * nX;
-      this.vy -= 1.6 * vDotN * nY;
-      // small tangent friction
-      this.vx *= 0.9; this.vy *= 0.9;
+    this.vy+=0.04*dt*60;
+    this.x+=this.vx*dt*60;
+    this.y+=this.vy*dt*60;
+
+    const dx=this.x-center.x;
+    const dy=this.y-center.y;
+    const d=Math.hypot(dx,dy);
+
+    if(d>globeRadius-1){
+      const nx=dx/d, ny=dy/d;
+      this.x=center.x+nx*(globeRadius-1);
+      this.y=center.y+ny*(globeRadius-1);
+
+      const dot=this.vx*nx+this.vy*ny;
+      this.vx -= 1.6*dot*nx;
+      this.vy -= 1.6*dot*ny;
+
+      this.vx*=0.9; this.vy*=0.9;
     }
   }
   draw(){
-    ctx.globalAlpha = this.alpha;
-    ctx.fillStyle = '#ffffff';
+    ctx.globalAlpha=this.alpha;
     ctx.beginPath();
-    ctx.arc(this.x, this.y, this.size, 0, Math.PI*2);
+    ctx.arc(this.x,this.y,this.size,0,Math.PI*2);
+    ctx.fillStyle="#fff";
     ctx.fill();
-    ctx.globalAlpha = 1;
+    ctx.globalAlpha=1;
   }
 }
 
-// ----------------- Snow object (circular physics body) -----------------
-class SnowObject {
+
+// ---------------- SNOW OBJECT (circular physics) ----------------
+class SnowObj{
   constructor(img){
-    this.img = img;
-    this.baseW = img.width;
-    this.baseH = img.height;
-    // will be set properly in rescale()
-    this.width = 0; this.height = 0; this.collisionRadius = 0;
-    this.x = 0; this.y = 0; this.vx = 0; this.vy = 0;
-    this.angle = 0; this.angularVelocity = 0;
-    this.settled = false;
-    this.rescale();
-    this.placeInitial();
+    this.img=img;
+    this.scale=0.25*(Math.min(W,H)/500);
+    this.w=img.width*this.scale;
+    this.h=img.height*this.scale;
+    this.r=Math.max(this.w,this.h)*0.45;
+
+    this.x=center.x;
+    this.y=center.y - globeRadius*0.4;
+    this.vx=0; this.vy=0;
+
+    this.angle=0;
+    this.angularVelocity=0;  // IMPORTANT: zero at start
   }
 
-  rescale(){
-    // scale relative to canvas size; base design reference 500px globe
-    const scale = (Math.min(W,H) / 500) * CIRCLE_SCALE;
-    this.width = Math.max(8, this.baseW * scale);
-    this.height = Math.max(8, this.baseH * scale);
-    // collision radius is circular hitbox
-    this.collisionRadius = Math.max(this.width, this.height) * 0.45;
-  }
-
-  placeInitial(){
-    // place near top center of globe (relative)
-    this.x = globeCenter.x;
-    this.y = globeCenter.y - globeRadius*0.45;
-    this.vx = 0; this.vy = 0;
-    this.angle = (Math.random()-0.5) * 0.5;
-    this.angularVelocity = 0;
-    this.settled = false;
-    this.ensureInside();
-  }
-
-  ensureInside(){
-    // if outside, push to inside boundary
-    const dx = this.x - globeCenter.x;
-    const dy = this.y - globeCenter.y;
-    const dist = Math.hypot(dx,dy);
-    const maxD = globeRadius - this.collisionRadius;
-    if (dist > maxD){
-      const nx = dx/dist, ny = dy/dist;
-      this.x = globeCenter.x + nx * maxD;
-      this.y = globeCenter.y + ny * maxD;
-      this.vx *= 0.5; this.vy *= 0.5;
-    }
-  }
-
-  applyForce(fx, fy){
-    this.vx += fx;
-    this.vy += fy;
-    // small torque from off-center impact
-    this.angularVelocity += (Math.random()-0.5) * 0.03;
-    this.settled = false;
+  applyForce(fx,fy){
+    this.vx+=fx;
+    this.vy+=fy;
+    this.angularVelocity += (Math.random()-.5)*0.02;
   }
 
   update(dt){
-    if (!this.settled){
-      // integrate gravity (scaled by dt)
-      this.vy += OBJECT_GRAVITY * dt * 60;
+    this.vy += OBJ_GRAVITY*dt*60;
+    this.x += this.vx*dt*60;
+    this.y += this.vy*dt*60;
 
-      // apply velocity
-      this.x += this.vx * dt * 60;
-      this.y += this.vy * dt * 60;
+    // ROTATION FIX: zero small drift
+    this.angle += this.angularVelocity*dt*60;
 
-      // rotational integration
-      this.angle += this.angularVelocity * dt * 60;
-
-      // damping
-      this.vx *= OBJECT_DAMPING;
-      this.vy *= OBJECT_DAMPING;
-      this.angularVelocity *= 0.98;
+    if(Math.abs(this.angularVelocity) < 0.0008){
+      this.angularVelocity = 0;   // <--- stops perpetual rotation
     }
 
-    // soft collision with globe boundary using circular hitbox
-    const dx = this.x - globeCenter.x;
-    const dy = this.y - globeCenter.y;
-    const dist = Math.hypot(dx,dy);
-    const maxDist = globeRadius - this.collisionRadius;
+    this.vx *= OBJ_DAMP;
+    this.vy *= OBJ_DAMP;
+    this.angularVelocity *= 0.98;
 
-    if (dist > maxDist){
-      // compute normal
-      const nx = dx / dist;
-      const ny = dy / dist;
-      const overlap = dist - maxDist;
+    // Boundary collision
+    const dx=this.x-center.x;
+    const dy=this.y-center.y;
+    const d=Math.hypot(dx,dy);
+    const maxD=globeRadius - this.r;
 
-      // push slightly inward (soft)
-      this.x -= nx * overlap * 0.5;
-      this.y -= ny * overlap * 0.5;
+    if(d>maxD){
+      const nx=dx/d, ny=dy/d;
+      const overlap=d-maxD;
 
-      // compute velocity normal component
-      const vDotN = this.vx*nx + this.vy*ny;
+      this.x-=nx*overlap*0.5;
+      this.y-=ny*overlap*0.5;
 
-      // reflect normal component with energy loss
-      this.vx -= (1.0 + 0.35) * vDotN * nx;
-      this.vy -= (1.0 + 0.35) * vDotN * ny;
+      const dot=this.vx*nx+this.vy*ny;
+      this.vx -= (1.0+0.35)*dot*nx;
+      this.vy -= (1.0+0.35)*dot*ny;
 
-      // add tangential sliding effect to encourage sliding downward:
-      // compute tangent vector (perp to normal)
-      const tx = -ny; const ty = nx;
-      // project velocity on tangent
-      const vDotT = this.vx*tx + this.vy*ty;
-      // apply slight friction along tangent to simulate sliding/rolling
-      const friction = 0.88;
-      this.vx = (this.vx - vDotT*tx) * friction + vDotT*tx;
-      this.vy = (this.vy - vDotT*ty) * friction + vDotT*ty;
+      // sliding
+      const tx=-ny, ty=nx;
+      const tdot=this.vx*tx+this.vy*ty;
+      this.vx = (this.vx - tdot*tx)*0.9 + tdot*tx;
+      this.vy = (this.vy - tdot*ty)*0.9 + tdot*ty;
 
-      // small rotational impulse
-      this.angularVelocity += (Math.sign(vDotT) || 1) * 0.02;
+      this.angularVelocity += (Math.sign(tdot)||1)*0.01;  
     }
-
-    // settled criteria: near bottom hemisphere and very slow
-    const bottomY = globeCenter.y + globeRadius * 0.55; // heuristic bottom region
-    const speed = Math.hypot(this.vx, this.vy);
-    if (!this.settled && this.y > bottomY && speed < 0.06 && Math.abs(this.angularVelocity) < 0.004){
-      // softly nudge into resting pose (snap rotation slowly to zero)
-      this.vx = 0; this.vy = 0; this.angularVelocity = 0;
-      this.settled = true;
-    }
-
-    // always ensure inside after adjustments
-    this.ensureInside();
   }
 
   draw(){
     ctx.save();
-    ctx.translate(this.x, this.y);
+    ctx.translate(this.x,this.y);
     ctx.rotate(this.angle);
-    // draw image centered
-    ctx.drawImage(this.img, -this.width/2, -this.height/2, this.width, this.height);
+    ctx.drawImage(this.img,-this.w/2,-this.h/2,this.w,this.h);
     ctx.restore();
   }
 }
 
-// ----------------- initialize particles -----------------
-function initParticles(){
-  particles = [];
-  for (let i=0;i<PARTICLE_COUNT;i++){
-    particles.push(new Particle());
-  }
+
+// ---------------- INIT ----------------
+let particles=[];
+let obj=null;
+let last=performance.now();
+
+function start(){
+  for(let i=0;i<PARTICLE_COUNT;i++) particles.push(new Particle());
+  obj=new SnowObj(objImg);
+  requestAnimationFrame(loop);
 }
 
-// ----------------- input: swipe detection -----------------
-let lastTouchX = null;
-let swipeEnergy = 0;
-canvas.addEventListener('touchstart', (e)=>{ lastTouchX = e.touches[0].clientX; });
-canvas.addEventListener('touchmove', (e)=>{
-  const tx = e.touches[0].clientX;
-  if (lastTouchX !== null){
-    const dx = tx - lastTouchX;
-    swipeEnergy += Math.abs(dx) * 0.01;
-    if (swipeEnergy > SWIPE_TRIGGER_ENERGY){
-      // apply swirl impulse proportional to swipeEnergy
-      applySwirl(Math.min(3.5, swipeEnergy * 0.9));
-      swipeEnergy = 0;
-    }
-  }
-  lastTouchX = tx;
-});
-canvas.addEventListener('touchend', ()=>{ lastTouchX = null; swipeEnergy = 0; });
+bgImg.onload = ()=>{ if(objImg.complete) start(); };
+objImg.onload = ()=>{ if(bgImg.complete) start(); };
 
-// ----------------- input: accelerometer (shake) -----------------
-function handleDeviceMotion(e){
-  // sum acceleration including gravity if available
-  const a = e.acceleration || e.accelerationIncludingGravity || { x:0, y:0, z:0 };
-  const mag = Math.abs(a.x||0) + Math.abs(a.y||0) + Math.abs(a.z||0);
-  if (mag > SHAKE_THRESHOLD){
-    applySwirl( (mag/10) ); // scaled impulse
-  }
-}
 
-// iOS permission flow
-function enableMotionIfRequired(){
-  if (typeof DeviceMotionEvent !== 'undefined' && typeof DeviceMotionEvent.requestPermission === 'function'){
-    // show hint to user to tap to enable (we try to request once)
-    DeviceMotionEvent.requestPermission().then(response=>{
-      if (response === 'granted'){
-        window.addEventListener('devicemotion', handleDeviceMotion);
-        hint.style.display = 'none';
-      } else {
-        // denied -> fallback only to touch
-        hint.style.display = 'block';
-      }
-    }).catch(err=>{
-      // fallback to adding listener anyway
-      try { window.addEventListener('devicemotion', handleDeviceMotion); } catch(e){/*ignore*/ }
-      hint.style.display = 'block';
-    });
-  } else {
-    // non-iOS: just add listener
-    window.addEventListener('devicemotion', handleDeviceMotion);
-  }
-}
+// ---------------- MAIN LOOP ----------------
+function loop(time){
+  const dt=Math.min(.033,(time-last)/1000);
+  last=time;
 
-// ----------------- Apply a global swirl impulse -----------------
-function applySwirl(force){
-  // push particles outward randomly
-  for (let p of particles){
-    const angle = Math.random()*Math.PI*2;
-    const mag = (0.6 + Math.random()*0.9) * force;
-    p.applyForce(Math.cos(angle)*mag, Math.sin(angle)*mag - Math.abs(force)*0.02);
-  }
-  // push the object more strongly
-  if (snowObj){
-    const angle = Math.random()*Math.PI*2;
-    snowObj.applyForce(Math.cos(angle)*force*1.8, Math.sin(angle)*force*1.8 - Math.abs(force)*0.6);
-  }
-}
-
-// ----------------- Animation loop -----------------
-let lastTime = performance.now();
-function tick(now){
-  const dt = Math.min(0.033, (now - lastTime)/1000);
-  lastTime = now;
-
-  // clear
   ctx.clearRect(0,0,W,H);
 
-  // draw background full-screen under globe (we draw clipped later)
-  if (bgImg.complete){
-    // mask to circle: draw into clip so background shows only inside circle
-    ctx.save();
-    ctx.beginPath();
-    ctx.arc(globeCenter.x, globeCenter.y, globeRadius, 0, Math.PI*2);
-    ctx.clip();
-    // draw background scaled to globe area (cover)
-    ctx.drawImage(bgImg, 0, 0, W, H);
-    ctx.restore();
+  // Clip to globe
+  ctx.save();
+  ctx.beginPath();
+  ctx.arc(center.x,center.y,globeRadius,0,Math.PI*2);
+  ctx.clip();
+
+  // Background
+  if(bgImg.complete){
+    ctx.drawImage(bgImg,0,0,W,H);
   }
 
-  // draw inner subtle vignette / glass effect by overlay (optional)
-  // (we keep it subtle for performance)
-  // update & draw snow object (beneath particles)
-  if (snowObj){
-    snowObj.update(dt);
-    // draw object under particles
-    snowObj.draw();
-  }
+  // Snow object
+  obj.update(dt);
+  obj.draw();
 
-  // update particles and draw them on top
-  for (let p of particles){
-    p.update(dt);
-    p.draw();
-  }
+  // Particles
+  for(const p of particles){ p.update(dt); p.draw(); }
 
-  requestAnimationFrame(tick);
+  // --- SUBTLE GLASS GLARE OVERLAY ---
+  ctx.save();
+  ctx.globalAlpha = 0.22;
+  const g = ctx.createRadialGradient(
+    center.x - globeRadius*0.4, center.y - globeRadius*0.5, 5,
+    center.x, center.y, globeRadius*1.1
+  );
+  g.addColorStop(0, "rgba(255,255,255,0.55)");
+  g.addColorStop(1, "rgba(255,255,255,0.0)");
+  ctx.fillStyle=g;
+  ctx.beginPath();
+  ctx.arc(center.x,center.y,globeRadius,0,Math.PI*2);
+  ctx.fill();
+  ctx.restore();
+
+  // Top highlight arc
+  ctx.save();
+  ctx.globalAlpha=0.14;
+  const lg=ctx.createLinearGradient(0,0,0,globeRadius*0.4);
+  lg.addColorStop(0,"rgba(255,255,255,0.32)");
+  lg.addColorStop(1,"rgba(255,255,255,0)");
+  ctx.fillStyle=lg;
+  ctx.beginPath();
+  ctx.arc(center.x,center.y,globeRadius,Math.PI*1.08,Math.PI*1.92);
+  ctx.fill();
+  ctx.restore();
+
+  ctx.restore();
+
+  requestAnimationFrame(loop);
 }
-
-// ----------------- start when images ready -----------------
-function tryStart(){
-  if (!bgImg.complete || !objImg.complete) return;
-  // set canvas size now that wrapper is measured
-  setCanvasSize();
-  // initialize particles and snow object
-  initParticles();
-  snowObj = new SnowObject(objImg);
-  // ensure object inside
-  snowObj.ensureInside();
-  // add device motion (permission)
-  enableMotionIfRequired();
-  // small UI hint
-  hint.style.display = 'block';
-  started = true;
-  lastTime = performance.now();
-  requestAnimationFrame(tick);
-}
-
-// listen for load events (in case already cached)
-bgImg.onload = tryStart;
-objImg.onload = tryStart;
-if (bgImg.complete && objImg.complete) tryStart();
-
-// ----------------- initial canvas sizing -----------------
-setCanvasSize();
-
-// expose debug on window for dev
-window.__snowGlobe = {
-  applySwirl, particles, snowObj, resetObject: ()=>snowObj && snowObj.placeInitial()
-};
 
 </script>
 </body>
