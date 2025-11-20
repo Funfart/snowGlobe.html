@@ -5,98 +5,150 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Snow Globe NFT</title>
 <style>
-    html, body {
-        margin: 0;
-        padding: 0;
-        width: 100%;
-        height: 100%;
-        display: flex;
-        justify-content: center;
-        align-items: center;
-        overflow: hidden;
-        background: #000;
-    }
-    #globeWrapper {
-        position: relative;
-        width: 90vw;
-        height: 90vw;
-        max-width: 500px;
-        max-height: 500px;
-        border-radius: 50%;
-        overflow: hidden;
-        border: 10px solid rgba(255,255,255,0.4);
-        box-shadow: 0 0 40px rgba(255,255,255,0.3) inset;
-        background: transparent;
-    }
-    canvas {
-        width: 100%;
-        height: 100%;
-        display: block;
-    }
+  body {
+    margin: 0;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    background: #000;
+    height: 100vh;
+  }
+  #globeWrapper {
+    position: relative;
+    width: 90vw;
+    max-width: 500px;
+    aspect-ratio: 1 / 1;
+    border-radius: 50%;
+    overflow: hidden;
+    border: 10px solid rgba(255,255,255,0.4);
+    box-shadow: 0 0 40px rgba(255,255,255,0.3) inset;
+  }
+  canvas {
+    width: 100%;
+    height: 100%;
+    display: block;
+  }
 </style>
 </head>
 <body>
 
 <div id="globeWrapper">
-    <canvas id="globeCanvas"></canvas>
+  <canvas id="globeCanvas"></canvas>
 </div>
 
 <script>
-// =======================
-// CONFIG
-// =======================
 const PARTICLE_COUNT = 400;
 const SHAKE_FORCE = 2.5;
 const SWIPE_FORCE = 3.0;
 const GRAVITY = 0.05;
-const HEAVY_GRAVITY = 0.2; // for snow object
 
 let canvas = document.getElementById("globeCanvas");
 let ctx = canvas.getContext("2d");
 let W, H, globeRadius;
 
-function resizeCanvas() {
-    canvas.width = canvas.offsetWidth;
-    canvas.height = canvas.offsetHeight;
-    W = canvas.width;
-    H = canvas.height;
-    globeRadius = W/2 - 10; // radius minus border
-}
-window.addEventListener('resize', resizeCanvas);
-resizeCanvas();
+// -------------------
+// Background
+// -------------------
+let background = new Image();
+background.src = "https://ipfs.io/ipfs/bafybeiepec62olvujw52tbntuaryuyoiofjjz7s246hmethykvgfbnls34";
 
-// =======================
-// BACKGROUND IMAGE
-// =======================
-let bgScene = new Image();
-bgScene.src = "https://ipfs.io/ipfs/bafybeiepec62olvujw52tbntuaryuyoiofjjz7s246hmethykvgfbnls34";
+// -------------------
+// Snow Object
+// -------------------
+let snowImg = new Image();
+snowImg.src = "https://ipfs.io/ipfs/bafybeigftb6innx7vd42qicjuhntoxlegfup2rpqu3flruilqinnvw2nae";
 
-// =======================
-// PARTICLE CLASS
-// =======================
-class Particle {
-    constructor() { this.reset(); }
-    reset() {
-        this.x = Math.random() * W;
-        this.y = Math.random() * H;
-        this.vx = 0;
-        this.vy = 0;
-        this.size = Math.random()*2+1;
+class SnowObject {
+    constructor(img){
+        this.img = img;
+        this.reset();
+    }
+    reset(){
+        let angle = Math.random()*Math.PI*2;
+        let r = Math.random()*globeRadius*0.7;
+        this.x = W/2 + r*Math.cos(angle);
+        this.y = H/2 + r*Math.sin(angle) - globeRadius*0.3;
+        this.vx = 0; this.vy = 0;
+        this.settled=false;
+        this.angle = Math.random()*Math.PI*2;
+        this.angularVelocity = (Math.random()-0.5)*0.02;
+        this.width = this.img.width * 0.25 * (W/500);
+        this.height = this.img.height * 0.25 * (H/500);
+    }
+    applyForce(fx, fy){
+        this.vx += fx;
+        this.vy += fy;
         this.settled = false;
     }
-    applyForce(fx, fy) { this.vx += fx; this.vy += fy; this.settled=false; }
-    update() {
+    update(){
         if(!this.settled){
-            this.vy += GRAVITY;
+            this.vy += GRAVITY*1.5; // heavier
             this.x += this.vx;
             this.y += this.vy;
             this.vx *= 0.98;
             this.vy *= 0.98;
+            this.angle += this.angularVelocity;
         }
-        // collision with bottom
-        if(this.y>H-this.size){ this.y=H-this.size; this.vx*=0.4; this.vy=0; if(Math.abs(this.vx)<0.01)this.settled=true;}
-        if(this.x<0){ this.x=0; this.vx*=-0.5;}
-        if(this.x>W){ this.x=W; this.vx*=-0.5;}
+        // globe boundary collision
+        let dx = this.x - W/2;
+        let dy = this.y - H/2;
+        let dist = Math.sqrt(dx*dx + dy*dy);
+        let maxR = globeRadius - Math.max(this.width,this.height)/2;
+        if(dist > maxR){
+            let angle = Math.atan2(dy, dx);
+            this.x = W/2 + Math.cos(angle)*maxR;
+            this.y = H/2 + Math.sin(angle)*maxR;
+            this.vx *= -0.5;
+            this.vy *= -0.5;
+            if(Math.abs(this.vx)<0.01 && Math.abs(this.vy)<0.01) this.settled=true;
+        }
+    }
+    draw(){
+        ctx.save();
+        ctx.translate(this.x, this.y);
+        ctx.rotate(this.angle);
+        ctx.drawImage(this.img,-this.width/2,-this.height/2,this.width,this.height);
+        ctx.restore();
+    }
+}
+
+let snowObject;
+snowImg.onload = ()=>{ snowObject = new SnowObject(snowImg); resizeCanvas(); };
+
+// -------------------
+// Particle System
+// -------------------
+class Particle {
+    constructor(){
+        this.reset();
+    }
+    reset(){
+        let angle = Math.random()*Math.PI*2;
+        let r = Math.random()*globeRadius*0.9;
+        this.x = W/2 + r*Math.cos(angle);
+        this.y = H/2 + r*Math.sin(angle);
+        this.vx = 0; this.vy = 0;
+        this.size = Math.random()*2+1;
+        this.settled=false;
+    }
+    applyForce(fx, fy){ this.vx+=fx; this.vy+=fy; this.settled=false; }
+    update(){
+        if(!this.settled){
+            this.vy += GRAVITY;
+            this.x += this.vx; this.y += this.vy;
+            this.vx *=0.98; this.vy*=0.98;
+        }
+        // constrain inside globe
+        let dx = this.x - W/2;
+        let dy = this.y - H/2;
+        let dist = Math.sqrt(dx*dx + dy*dy);
+        if(dist > globeRadius){
+            let angle = Math.atan2(dy, dx);
+            this.x = W/2 + Math.cos(angle)*globeRadius;
+            this.y = H/2 + Math.sin(angle)*globeRadius;
+            this.vx*=-0.5; this.vy*=-0.5;
+            if(Math.abs(this.vx)<0.01 && Math.abs(this.vy)<0.01) this.settled=true;
+        }
     }
     draw(){
         ctx.fillStyle="white";
@@ -106,115 +158,37 @@ class Particle {
     }
 }
 
-// =======================
-// SNOW OBJECT CLASS
-// =======================
-class SnowObject {
-    constructor(img){
-        this.img = img;
-        this.width = img.width*0.25;
-        this.height = img.height*0.25;
-        this.reset();
-    }
-    reset(){
-        // start near top in random position within circle
-        let angle = Math.random()*Math.PI*2;
-        let r = Math.random()*globeRadius*0.7;
-        this.x = W/2 + r*Math.cos(angle);
-        this.y = H/2 + r*Math.sin(angle) - globeRadius*0.3;
-        this.vx = 0; this.vy = 0;
-        this.settled=false;
-        this.angle = Math.random()*Math.PI*2;
-        this.angularVelocity = (Math.random()-0.5)*0.02;
-    }
-    applyForce(fx, fy){
-        this.vx += fx;
-        this.vy += fy;
-        this.settled=false;
-        this.angularVelocity += (Math.random()-0.5)*0.05;
-    }
-    update(){
-        if(!this.settled){
-            this.vy += HEAVY_GRAVITY;
-            this.x += this.vx;
-            this.y += this.vy;
-            this.vx*=0.98; this.vy*=0.98;
-            this.angle += this.angularVelocity;
-        }
-        // boundary check: keep inside circle
-        let dx = this.x - W/2;
-        let dy = this.y - H/2;
-        let dist = Math.sqrt(dx*dx + dy*dy);
-        if(dist + Math.max(this.width,this.height)/2 > globeRadius){
-            let angle = Math.atan2(dy,dx);
-            let overlap = dist + Math.max(this.width,this.height)/2 - globeRadius;
-            this.x -= Math.cos(angle)*overlap;
-            this.y -= Math.sin(angle)*overlap;
-            this.vx*=-0.5;
-            this.vy*=-0.5;
-            this.angularVelocity*=-0.5;
-            if(Math.abs(this.vx)<0.01 && Math.abs(this.vy)<0.01) this.settled=true;
-        }
-    }
-    draw(){
-        ctx.save();
-        ctx.translate(this.x,this.y);
-        ctx.rotate(this.angle);
-        ctx.drawImage(this.img,-this.width/2,-this.height/2,this.width,this.height);
-        ctx.restore();
-    }
-}
-
-// =======================
-// CREATE PARTICLES
-// =======================
-let particles=[];
+let particles = [];
 for(let i=0;i<PARTICLE_COUNT;i++) particles.push(new Particle());
 
-// =======================
-// LOAD SNOW OBJECT IMAGE
-// =======================
-let snowImg=new Image();
-snowImg.src="https://ipfs.io/ipfs/bafybeigftb6innx7vd42qicjuhntoxlegfup2rpqu3flruilqinnvw2nae";
-let snowObject=null;
-snowImg.onload=()=>{
-    snowObject = new SnowObject(snowImg);
-}
-
-// =======================
-// SWIPE DETECTION
-// =======================
-let lastX = null;
-let swipeEnergy = 0;
+// -------------------
+// Swipe Detection
+// -------------------
+let lastX=null, swipeEnergy=0;
 canvas.addEventListener("touchmove", e=>{
-    let touch=e.touches[0];
+    let touch = e.touches[0];
     if(lastX!==null){
-        let dx=touch.clientX-lastX;
+        let dx = touch.clientX-lastX;
         swipeEnergy+=Math.abs(dx)*0.01;
         if(swipeEnergy>1) triggerSwirl(SWIPE_FORCE);
     }
     lastX=touch.clientX;
 });
-canvas.addEventListener("touchend",()=>{lastX=null; swipeEnergy=0;});
+canvas.addEventListener("touchend",()=>{ lastX=null; swipeEnergy=0; });
 
-// =======================
-// ACCELEROMETER / SHAKE
-// =======================
-function handleMotion(e){
-    let shake = Math.abs(e.acceleration.x||0)+Math.abs(e.acceleration.y||0)+Math.abs(e.acceleration.z||0);
-    if(shake>22) triggerSwirl(SHAKE_FORCE);
-}
-if(typeof DeviceMotionEvent!=='undefined' && typeof DeviceMotionEvent.requestPermission==='function'){
-    DeviceMotionEvent.requestPermission()
-        .then(response=>{if(response==='granted')window.addEventListener('devicemotion',handleMotion);})
-        .catch(console.error);
-}else{
-    window.addEventListener('devicemotion',handleMotion);
+// -------------------
+// Accelerometer
+// -------------------
+if(window.DeviceMotionEvent){
+    window.addEventListener("devicemotion", e=>{
+        let shake=Math.abs(e.acceleration.x)+Math.abs(e.acceleration.y)+Math.abs(e.acceleration.z);
+        if(shake>22) triggerSwirl(SHAKE_FORCE);
+    });
 }
 
-// =======================
-// SWIRL EFFECT
-// =======================
+// -------------------
+// Swirl
+// -------------------
 function triggerSwirl(force){
     particles.forEach(p=>{
         let angle=Math.random()*Math.PI*2;
@@ -222,23 +196,54 @@ function triggerSwirl(force){
         p.vy+=Math.sin(angle)*force;
         p.settled=false;
     });
-    if(snowObject) snowObject.applyForce((Math.random()-0.5)*force*5,-Math.random()*force*2);
+    if(snowObject) {
+        let angle=Math.random()*Math.PI*2;
+        snowObject.applyForce(Math.cos(angle)*force, Math.sin(angle)*force);
+    }
 }
 
-// =======================
-// MAIN LOOP
-// =======================
+// -------------------
+// Animation Loop
+// -------------------
 function loop(){
     ctx.clearRect(0,0,W,H);
-    // draw scene background
-    ctx.drawImage(bgScene,0,0,W,H);
-    // draw snow object beneath particles
-    if(snowObject){ snowObject.update(); snowObject.draw(); }
-    // draw particles on top
+    if(background.complete) ctx.drawImage(background,0,0,W,H);
+    if(snowObject) { snowObject.update(); snowObject.draw(); }
     particles.forEach(p=>{ p.update(); p.draw(); });
     requestAnimationFrame(loop);
 }
-bgScene.onload = loop;
+
+// -------------------
+// Resize Canvas
+// -------------------
+function resizeCanvas(){
+    canvas.width = canvas.offsetWidth;
+    canvas.height = canvas.offsetHeight;
+    W = canvas.width; H = canvas.height;
+    globeRadius = W/2 - 10;
+
+    if(snowObject){
+        let scale = 0.25*(W/500);
+        snowObject.width = snowObject.img.width*scale;
+        snowObject.height = snowObject.img.height*scale;
+        // keep inside globe
+        let dx = snowObject.x - W/2;
+        let dy = snowObject.y - H/2;
+        let dist = Math.sqrt(dx*dx + dy*dy);
+        if(dist + Math.max(snowObject.width,snowObject.height)/2 > globeRadius){
+            let angle = Math.atan2(dy, dx);
+            snowObject.x = W/2 + Math.cos(angle)*(globeRadius - Math.max(snowObject.width,snowObject.height)/2);
+            snowObject.y = H/2 + Math.sin(angle)*(globeRadius - Math.max(snowObject.width,snowObject.height)/2);
+        }
+    }
+    particles.forEach(p=>p.reset());
+}
+window.addEventListener('resize', resizeCanvas);
+
+// -------------------
+// Start
+// -------------------
+background.onload = loop;
 
 </script>
 </body>
