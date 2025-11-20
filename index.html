@@ -3,45 +3,26 @@
 <head>
 <meta charset="utf-8"/>
 <meta name="viewport" content="width=device-width,initial-scale=1.0,viewport-fit=cover"/>
-<title>Snow Globe — Tutorial + Flip</title>
+<title>Snow Globe — Fixed Gestures + Tutorial</title>
 <style>
   :root{ --bg:#041022; --hint:#dfefff; }
   html,body{height:100%;margin:0;background:var(--bg);display:flex;align-items:center;justify-content:center;font-family:system-ui,Arial;}
   #globeWrap{width:92vw;max-width:520px;aspect-ratio:1/1;border-radius:50%;overflow:hidden;border:10px solid rgba(255,255,255,0.12);box-shadow:0 20px 50px rgba(0,0,0,0.6) inset;position:relative;background:#02101a}
   canvas{display:block;width:100%;height:100%;}
-  /* Tutorial overlay */
-  #tutorial{
-    position:absolute;left:0;right:0;top:0;bottom:0;display:flex;align-items:center;justify-content:center;
-    pointer-events:auto;
-  }
-  .tcard{
-    width:70%;max-width:320px;background:linear-gradient(180deg, rgba(255,255,255,0.04), rgba(255,255,255,0.02));
-    border-radius:14px;padding:18px;text-align:center;color:var(--hint);backdrop-filter: blur(6px);
-    box-shadow:0 6px 18px rgba(0,0,0,0.6);
-  }
+  /* Tutorial overlay - DOES NOT BLOCK TOUCHES (pointer-events:none) so gestures pass through */
+  #tutorial{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;pointer-events:none}
+  .tcard{width:70%;max-width:320px;background:linear-gradient(180deg, rgba(255,255,255,0.03), rgba(255,255,255,0.02));border-radius:14px;padding:18px;text-align:center;color:var(--hint);backdrop-filter: blur(6px);box-shadow:0 6px 18px rgba(0,0,0,0.6);transform-origin:center;pointer-events:none}
   .title{font-size:18px;margin-bottom:8px}
   .hint{font-size:13px;opacity:0.95}
-  /* hand swipe animation */
-  .hand{
-    width:72px;height:72px;margin:12px auto 6px;position:relative;
-  }
-  .finger{
-    width:18px;height:26px;border-radius:12px;background:rgba(255,255,255,0.9);position:absolute;left:27px;top:8px;transform-origin:center top;
-    animation: tap 1000ms infinite;
-    box-shadow:0 1px 0 rgba(0,0,0,0.15);
-  }
-  .finger::after{content:'';position:absolute;left:-26px;top:24px;width:60px;height:10px;border-radius:8px;background:linear-gradient(90deg, rgba(255,255,255,0.06), rgba(255,255,255,0.02));}
-  @keyframes tap{
-    0%{transform:translateX(-20px) rotate(-12deg);opacity:0.92}
-    30%{transform:translateX(-2px) rotate(-4deg);opacity:1}
-    60%{transform:translateX(20px) rotate(6deg);opacity:0.96}
-    100%{transform:translateX(-20px) rotate(-12deg);opacity:0.92}
-  }
-  /* Confetti layer */
-  #confetti{position:absolute;left:0;right:0;top:0;bottom:0;pointer-events:none;overflow:hidden}
+  .hand{width:72px;height:72px;margin:12px auto 6px;position:relative}
+  .finger{width:18px;height:26px;border-radius:12px;background:rgba(255,255,255,0.9);position:absolute;left:27px;top:8px;transform-origin:center top;animation: tap 1000ms infinite;box-shadow:0 1px 0 rgba(0,0,0,0.12)}
+  .finger::after{content:'';position:absolute;left:-26px;top:24px;width:60px;height:10px;border-radius:8px;background:linear-gradient(90deg, rgba(255,255,255,0.06), rgba(255,255,255,0.02))}
+  @keyframes tap{0%{transform:translateX(-20px) rotate(-12deg);opacity:0.92}30%{transform:translateX(-2px) rotate(-4deg);opacity:1}60%{transform:translateX(20px) rotate(6deg);opacity:0.96}100%{transform:translateX(-20px) rotate(-12deg);opacity:0.92}}
+  /* confetti pieces */
+  #confetti{position:absolute;inset:0;pointer-events:none;overflow:hidden}
   .confetti-piece{position:absolute;width:8px;height:12px;border-radius:2px;opacity:0.95;transform-origin:center center}
-  /* small UX hint */
-  #miniHint{position:absolute;left:12px;bottom:12px;color:var(--hint);font-size:12px;opacity:0.9}
+  /* mini hint */
+  #miniHint{position:absolute;left:12px;bottom:12px;color:var(--hint);font-size:12px;opacity:0.9;pointer-events:none}
 </style>
 </head>
 <body>
@@ -49,10 +30,10 @@
     <canvas id="globe"></canvas>
 
     <div id="tutorial" aria-hidden="false">
-      <div class="tcard" id="tcard">
-        <div class="hand" aria-hidden="true"><div class="finger"></div></div>
+      <div class="tcard" id="tcard" aria-hidden="true">
+        <div class="hand"><div class="finger"></div></div>
         <div class="title">Swipe Snow-Globe</div>
-        <div class="hint">Swipe left & right or shake your device to wake the snow. Tap the globe to add a sparkle.</div>
+        <div class="hint">Swipe left & right or shake your device to wake the snow. Tap to add sparkles. Flip phone to invert gravity.</div>
       </div>
     </div>
 
@@ -61,65 +42,67 @@
   </div>
 
 <script>
-/* Minimal tutorial + full app
-   - Swipe tutorial overlay removed on first activation
-   - Confetti on first activation
-   - Flip detection (upside-down inverts gravity)
-   - Circular physics for image1 and confined particles
-   - Uses your IPFS CIDs (background + image)
+/* Full fixed single-file Snow Globe
+   - gestures work during tutorial (tutorial overlay doesn't block touches)
+   - swipes/shakes remove tutorial and trigger confetti
+   - supports device flip to invert gravity
+   - circular physics for image1 and particles inside globe
+   - responsive & mobile-friendly
 */
 
-// ---------- CONFIG ----------
+/* ---------- CONFIG ---------- */
 const BG_CID = 'bafybeiepec62olvujw52tbntuaryuyoiofjjz7s246hmethykvgfbnls34';
 const OBJ_CID = 'bafybeihnyoiyxsrzicx23funhiiwijfl55twsls6bsn4ypc2ybxyh7ucc4';
 const PARTICLE_COUNT = 400;
-const GRAVITY_BASE = 0.05; // base gravity magnitude
-const OBJECT_HEAVIER = 1.5; // object heavier multiplier
+const GRAVITY_BASE = 0.05;
+const OBJECT_HEAVIER = 1.5;
 const SWIRL_FORCE = 2.8;
-const CONFETTI_PIECES = 42;
+const CONFETTI_COUNT = 42;
 
-// ---------- DOM ----------
+/* ---------- DOM ---------- */
+const wrap = document.getElementById('globeWrap');
 const canvas = document.getElementById('globe');
 const ctx = canvas.getContext('2d');
-const wrap = document.getElementById('globeWrap');
 const tutorial = document.getElementById('tutorial');
 const tcard = document.getElementById('tcard');
 const confettiLayer = document.getElementById('confetti');
+const miniHint = document.getElementById('miniHint');
 
-let W=0,H=0,CX=0,CY=0,R=0, DPR = Math.min(window.devicePixelRatio||1,2);
-let started=false, tutorialShown=true, confettiActive=false;
-let gravitySign = 1; // 1 normal, -1 inverted (upside-down)
+let DPR = Math.min(window.devicePixelRatio || 1, 2);
+let W = 0, H = 0, CX = 0, CY = 0, R = 0;
+let particles = [], snowObj = null;
+let last = performance.now();
+let gravitySign = 1; // 1 normal, -1 inverted
+let started = false;
+let tutorialShown = true;
 
-// ---------- HiDPI & Resize ----------
+/* ---------- HiDPI & resize ---------- */
 function resize(){
   const cssW = wrap.clientWidth, cssH = wrap.clientHeight;
-  DPR = Math.min(window.devicePixelRatio||1,2);
+  DPR = Math.min(window.devicePixelRatio || 1, 2);
   canvas.style.width = cssW + 'px';
   canvas.style.height = cssH + 'px';
   canvas.width = Math.round(cssW * DPR);
   canvas.height = Math.round(cssH * DPR);
   ctx.setTransform(DPR,0,0,DPR,0,0);
   W = cssW; H = cssH; CX = W/2; CY = H/2; R = Math.min(W,H)/2 - 8;
-  // rescale particles/object if exist
-  if (particles) for (let p of particles) p.ensureInside();
-  if (snowObj) snowObj.rescale();
+  // ensure inside constraints
+  if (particles) for (let p of particles) p.ensureInside && p.ensureInside();
+  if (snowObj) snowObj.rescale && snowObj.rescale();
 }
 window.addEventListener('resize', resize);
 resize();
 
-// ---------- IMAGES ----------
+/* ---------- Images ---------- */
 const bg = new Image(); bg.crossOrigin='anonymous'; bg.src = 'https://ipfs.io/ipfs/' + BG_CID;
 const objImg = new Image(); objImg.crossOrigin='anonymous'; objImg.src = 'https://ipfs.io/ipfs/' + OBJ_CID;
 
-// ---------- UTIL ----------
-function rand(min,max){return Math.random()*(max-min)+min}
-function now(){return performance.now()}
+/* ---------- Utils ---------- */
+const rand = (a,b)=> Math.random()*(b-a)+a;
 
-// ---------- PARTICLES ----------
+/* ---------- Particle Class ---------- */
 class Particle {
-  constructor(initial=true){
-    this.reset(initial);
-  }
+  constructor(){ this.reset(true); }
   reset(initial=true){
     const a = Math.random()*Math.PI*2;
     const r = Math.sqrt(Math.random()) * (R * 0.92);
@@ -137,8 +120,7 @@ class Particle {
       this.vy += g * dt * 60;
       this.x += this.vx * dt * 60;
       this.y += this.vy * dt * 60;
-      this.vx *= 0.987;
-      this.vy *= 0.987;
+      this.vx *= 0.987; this.vy *= 0.987;
     }
     this.ensureInside();
   }
@@ -157,8 +139,8 @@ class Particle {
     }
   }
   draw(){
-    ctx.fillStyle = 'white';
     ctx.globalAlpha = this.alpha;
+    ctx.fillStyle = '#fff';
     ctx.beginPath();
     ctx.arc(this.x, this.y, this.size, 0, Math.PI*2);
     ctx.fill();
@@ -166,18 +148,14 @@ class Particle {
   }
 }
 
-// ---------- SNOW OBJECT (circular physics body) ----------
+/* ---------- Snow Object (circular physics) ---------- */
 class SnowObject {
-  constructor(img){
-    this.img = img;
-    this.rescale();
-    this.placeInitial();
-  }
+  constructor(img){ this.img = img; this.rescale(); this.placeInitial(); }
   rescale(){
     const scale = (Math.min(W,H) / 500) * 0.25;
     this.w = Math.max(8, this.img.width * scale);
     this.h = Math.max(8, this.img.height * scale);
-    this.r = Math.max(this.w,this.h) * 0.45; // circular collision radius
+    this.r = Math.max(this.w,this.h) * 0.45;
   }
   placeInitial(){
     this.x = CX;
@@ -188,8 +166,7 @@ class SnowObject {
     this.ensureInside();
   }
   applyForce(fx,fy){
-    this.vx += fx;
-    this.vy += fy;
+    this.vx += fx; this.vy += fy;
     this.angularVelocity += (Math.random()-0.5) * 0.03;
     this.settled = false;
   }
@@ -199,53 +176,43 @@ class SnowObject {
       this.x += this.vx * dt * 60;
       this.y += this.vy * dt * 60;
       this.angle += this.angularVelocity * dt * 60;
-      this.vx *= 0.96; this.vy *= 0.96;
-      this.angularVelocity *= 0.98;
+      this.vx *= 0.96; this.vy *= 0.96; this.angularVelocity *= 0.98;
       if (Math.abs(this.angularVelocity) < 0.0008) this.angularVelocity = 0;
     }
-
-    // soft circular collision with globe rim
+    // soft rim collision
     const dx = this.x - CX, dy = this.y - CY;
     const dist = Math.hypot(dx,dy);
-    const maxDist = R - this.r;
-    if (dist > maxDist){
-      const nx = dx / dist, ny = dy / dist;
-      const overlap = dist - maxDist;
+    const max = R - this.r;
+    if (dist > max){
+      const nx = dx/dist, ny = dy/dist;
+      const overlap = dist - max;
       this.x -= nx * overlap * 0.5;
       this.y -= ny * overlap * 0.5;
-
-      const vDotN = this.vx * nx + this.vy * ny;
-      this.vx -= (1.2) * vDotN * nx;
-      this.vy -= (1.2) * vDotN * ny;
-
-      // tangential slide/ friction
+      const vDotN = this.vx*nx + this.vy*ny;
+      this.vx -= 1.2 * vDotN * nx;
+      this.vy -= 1.2 * vDotN * ny;
       const tx = -ny, ty = nx;
       const vDotT = this.vx*tx + this.vy*ty;
-      const friction = 0.86;
-      this.vx = (this.vx - vDotT*tx) * friction + vDotT*tx;
-      this.vy = (this.vy - vDotT*ty) * friction + vDotT*ty;
-
-      // small rotational impulse
+      this.vx = (this.vx - vDotT*tx) * 0.86 + vDotT*tx;
+      this.vy = (this.vy - vDotT*ty) * 0.86 + vDotT*ty;
       this.angularVelocity += (Math.sign(vDotT) || 1) * 0.02;
     }
-
-    // settle heuristic: near bottom hemisphere & very slow
+    // settle
     const bottomY = CY + R * 0.45;
     const speed = Math.hypot(this.vx, this.vy);
     if (!this.settled && this.y > bottomY && speed < 0.06 && Math.abs(this.angularVelocity) < 0.004){
       this.vx = 0; this.vy = 0; this.angularVelocity = 0; this.settled = true;
     }
-
     this.ensureInside();
   }
   ensureInside(){
     const dx = this.x - CX, dy = this.y - CY;
     const dist = Math.hypot(dx,dy);
-    const maxD = Math.max(0, R - this.r);
-    if (dist > maxD){
+    const max = Math.max(0, R - this.r);
+    if (dist > max){
       const nx = dx/dist, ny = dy/dist;
-      this.x = CX + nx * maxD;
-      this.y = CY + ny * maxD;
+      this.x = CX + nx * max;
+      this.y = CY + ny * max;
       this.vx *= 0.5; this.vy *= 0.5;
     }
   }
@@ -258,212 +225,190 @@ class SnowObject {
   }
 }
 
-// ---------- CONFETTI ----------
-function spawnConfetti(){
+/* ---------- Confetti helpers ---------- */
+function spawnConfettiBig(){
   confettiLayer.innerHTML = '';
   const colors = ['#ff4d6d','#ffd166','#6ee7b7','#9ad4ff','#b39cff'];
-  for (let i=0;i<CONFETTI_PIECES;i++){
+  for (let i=0;i<CONFETTI_COUNT;i++){
     const el = document.createElement('div');
     el.className = 'confetti-piece';
-    const size = rand(6,12);
-    el.style.width = size + 'px'; el.style.height = Math.round(size*1.4)+'px';
-    el.style.left = (50 + rand(-20,20)) + '%';
-    el.style.top = '40%';
+    const size = Math.round(rand(6,12));
+    el.style.width = size + 'px';
+    el.style.height = Math.round(size*1.4) + 'px';
+    el.style.left = (50 + rand(-25,25)) + '%';
+    el.style.top = '45%';
     el.style.background = colors[i % colors.length];
-    el.style.opacity = String(rand(0.9,1));
-    el.style.transform = `translate3d(${rand(-60,60)}px,0,0) rotate(${rand(0,360)}deg)`;
-    el.style.willChange = 'transform,opacity';
     confettiLayer.appendChild(el);
-
-    // animate using requestAnimationFrame timeline
     const start = performance.now();
-    const duration = rand(800,1400);
-    (function animatePiece(now){
-      const t = (now - start)/duration;
-      if (t >= 1){
-        el.style.opacity = '0';
-        setTimeout(()=>el.remove(), 400);
-        return;
-      }
+    const dur = rand(800,1400);
+    (function animate(now){
+      const t = Math.min(1, (now - start)/dur);
+      if (t >= 1){ el.remove(); return; }
       const ease = Math.sin(t*Math.PI*0.5);
-      const dx = rand(-120,120) * ease;
-      const dy = ( -200 - rand(0,120)) * ease + (t*150);
-      const rot = rand(0,360) * (1 - t);
+      const dx = rand(-200,200) * ease;
+      const dy = -rand(160,320) * (1 - ease) + ease * 120;
+      const rot = rand(0,720) * (1 - t);
       el.style.transform = `translate3d(${dx}px,${dy}px,0) rotate(${rot}deg)`;
-      requestAnimationFrame(animatePiece);
+      requestAnimationFrame(animate);
     })(performance.now());
   }
-  // clear after short time
   setTimeout(()=>confettiLayer.innerHTML = '', 1800);
 }
 
-// ---------- STATE ----------
-let particles = [];
-let snowObj = null;
-let lastT = performance.now();
-let gravity = GRAVITY_BASE * gravitySign;
+/* ---------- Interaction handling (fixed) ---------- */
+/* We attach gesture listeners to window so overlays never block them. */
 
-// ---------- INIT ----------
-function initParticles(){
-  particles = [];
-  for (let i=0;i<PARTICLE_COUNT;i++) particles.push(new Particle(true));
-}
-initParticles();
-
-// start when images loaded
-function startIfReady(){
-  if (!bg.complete || !objImg.complete) { setTimeout(startIfReady,50); return; }
-  resize(); // ensure geometry
-  snowObj = new SnowObject(objImg);
-  // nice initial settle
-  snowObj.placeInitial();
-  lastT = performance.now();
-  requestAnimationFrame(loop);
-}
-bg.onload = startIfReady;
-objImg.onload = startIfReady;
-
-// ---------- INTERACTION (tutorial -> activation) ----------
-function activateFromUser(){
-  if (!started){
-    started = true;
-    if (tutorialShown){
-      tutorialShown = false;
-      // remove tutorial card
-      tutorial.style.transition = 'opacity 300ms ease';
-      tutorial.style.opacity = 0;
-      setTimeout(()=> tutorial.remove(), 420);
-      // confetti
-      spawnConfetti();
-    }
-  }
-}
-
-// swipe detection for tutorial and swirl
 let lastTouchX = null;
 let swipeAccum = 0;
-canvas.addEventListener('touchstart', (e)=>{ lastTouchX = e.touches[0].clientX; });
-canvas.addEventListener('touchmove', (e)=>{
-  const tx = e.touches[0].clientX;
+
+function onPointerStart(e){
+  const x = (e.touches ? e.touches[0].clientX : e.clientX);
+  lastTouchX = x;
+}
+function onPointerMove(e){
+  const x = (e.touches ? e.touches[0].clientX : e.clientX);
   if (lastTouchX !== null){
-    const dx = tx - lastTouchX;
+    const dx = x - lastTouchX;
     swipeAccum += Math.abs(dx) * 0.02;
-    // small visual cue: scale tutorial card slightly on heavy swipe
-    if (tutorialShown && swipeAccum > 0.4){
-      tcard.style.transform = 'scale(0.98)';
+    if (tutorialShown){
+      // tiny visual poke
+      tcard.style.transform = `scale(${1 - Math.min(0.03, swipeAccum*0.02)})`;
     }
     if (swipeAccum > 1.0){
-      // activate
       activateFromUser();
       applySwirl( SWIRL_FORCE * Math.min(2, swipeAccum) );
       swipeAccum = 0;
     }
   }
-  lastTouchX = tx;
-});
-canvas.addEventListener('touchend', ()=>{ lastTouchX = null; swipeAccum = 0; });
+  lastTouchX = x;
+}
+function onPointerEnd(e){
+  lastTouchX = null;
+  swipeAccum = 0;
+}
 
-// click/tap burst
-canvas.addEventListener('click', (e)=>{
+window.addEventListener('touchstart', onPointerStart, {passive:true});
+window.addEventListener('pointerdown', onPointerStart, {passive:true});
+window.addEventListener('touchmove', onPointerMove, {passive:true});
+window.addEventListener('pointermove', onPointerMove, {passive:true});
+window.addEventListener('touchend', onPointerEnd, {passive:true});
+window.addEventListener('pointerup', onPointerEnd, {passive:true});
+
+/* Click/tap burst */
+window.addEventListener('click', (e)=>{
   activateFromUser();
-  burstAt(e.clientX, e.clientY);
+  const rect = wrap.getBoundingClientRect();
+  const cx = e.clientX - rect.left;
+  const cy = e.clientY - rect.top;
+  burstAt(cx, cy);
 });
 
-// device motion (shake) -> activation + swirl
+/* Shake (devicemotion) */
 function handleMotion(e){
   const a = e.accelerationIncludingGravity || e.acceleration || {x:0,y:0,z:0};
   const mag = Math.abs(a.x||0) + Math.abs(a.y||0) + Math.abs(a.z||0);
   if (mag > 20){
     activateFromUser();
-    applySwirl( Math.min(6, (mag/8)) );
+    applySwirl( Math.min(6, mag/8) );
   }
 }
 if (typeof DeviceMotionEvent !== 'undefined' && typeof DeviceMotionEvent.requestPermission === 'function'){
-  // request permission on first user gesture
-  const opt = { once:true };
-  window.addEventListener('touchstart', ()=> {
+  // request permission upon first touch (so it works in iOS)
+  window.addEventListener('touchstart', function requestOnce(){
     DeviceMotionEvent.requestPermission().then(resp=>{
       if (resp === 'granted') window.addEventListener('devicemotion', handleMotion);
-    }).catch(()=>{/*ignore*/});
-  }, opt);
+    }).catch(()=>{/* ignore */});
+    window.removeEventListener('touchstart', requestOnce);
+  }, { once:true });
 } else {
   window.addEventListener('devicemotion', handleMotion);
 }
 
-// ---------- orientation flip detection (180 deg) ----------
+/* Orientation flip: use deviceorientation when available */
 function handleOrientation(e){
-  // beta: front-to-back tilt [-180,180]
   const beta = e.beta || 0;
-  // if device flipped so screen faces downward/upside-down, beta ~ +-180
   if (Math.abs(beta) > 140){
-    // upside-down
     if (gravitySign !== -1){
       gravitySign = -1;
-      gravity = GRAVITY_BASE * gravitySign;
-      // give small impulse so particles react
       applyGlobalFlipImpulse();
     }
   } else {
     if (gravitySign !== 1){
       gravitySign = 1;
-      gravity = GRAVITY_BASE * gravitySign;
       applyGlobalFlipImpulse();
     }
   }
 }
 if (typeof DeviceOrientationEvent !== 'undefined' && typeof DeviceOrientationEvent.requestPermission === 'function'){
-  // request permission on gesture similarly
-  window.addEventListener('touchstart', ()=> {
+  window.addEventListener('touchstart', function reqOr(){
     DeviceOrientationEvent.requestPermission().then(resp=>{
       if (resp === 'granted') window.addEventListener('deviceorientation', handleOrientation);
-    }).catch(()=>{/*ignore*/});
+    }).catch(()=>{/* ignore */});
+    window.removeEventListener('touchstart', reqOr);
   }, { once:true });
 } else {
   window.addEventListener('deviceorientation', handleOrientation);
 }
 
-// fallback: if orientation events unavailable, try screen.orientation angle
-function checkScreenAngle(){
+/* fallback for screen orientation angle */
+setInterval(()=>{
   const angle = (screen.orientation && screen.orientation.angle) || window.orientation || 0;
-  if (Math.abs(angle - 180) < 20){
-    if (gravitySign !== -1){ gravitySign = -1; gravity = GRAVITY_BASE * gravitySign; applyGlobalFlipImpulse(); }
+  if (Math.abs(angle - 180) < 25){
+    if (gravitySign !== -1){ gravitySign = -1; applyGlobalFlipImpulse(); }
   } else {
-    if (gravitySign !== 1){ gravitySign = 1; gravity = GRAVITY_BASE * gravitySign; applyGlobalFlipImpulse(); }
+    if (gravitySign !== 1){ gravitySign = 1; applyGlobalFlipImpulse(); }
+  }
+}, 1100);
+
+/* ---------- Activation flow ---------- */
+function activateFromUser(){
+  if (!started){
+    started = true;
+    if (tutorialShown){
+      tutorialShown = false;
+      // fade out tutorial
+      tcard.style.transition = 'opacity 300ms ease, transform 220ms ease';
+      tcard.style.opacity = 0;
+      tcard.style.transform = 'scale(0.96)';
+      setTimeout(()=> tutorial.remove(), 360);
+      // big confetti
+      spawnConfettiBig();
+    }
   }
 }
-setInterval(checkScreenAngle, 1200);
 
-// ---------- helpers ----------
+/* ---------- Swirl / burst helpers ---------- */
 function applySwirl(force){
-  for (let p of particles) {
+  for (let p of particles){
     const a = Math.random()*Math.PI*2;
-    p.applyForce(Math.cos(a)*force, Math.sin(a)*force * 0.6);
+    p.applyForce(Math.cos(a)*force, Math.sin(a)*force * 0.6 * -gravitySign);
   }
   if (snowObj){
     const a = Math.random()*Math.PI*2;
-    snowObj.applyForce(Math.cos(a)*force*1.6, Math.sin(a)*force*1.6);
+    snowObj.applyForce(Math.cos(a)*force*1.6, Math.sin(a)*force*1.6 * -gravitySign);
   }
 }
-
-// small burst at tap
 function burstAt(cx,cy){
-  for (let i=0;i<12;i++){
+  // cx,cy in client coords relative to wrap — convert to canvas coords
+  const rect = wrap.getBoundingClientRect();
+  const localX = cx;
+  const localY = cy;
+  for (let i=0;i<18;i++){
+    const idx = Math.floor(Math.random() * particles.length);
+    const p = particles[idx];
+    p.x = localX + (Math.random()-0.5) * 30;
+    p.y = localY + (Math.random()-0.5) * 30;
     const a = Math.random()*Math.PI*2;
-    const idx = Math.floor(Math.random()*particles.length);
-    particles[idx].x = cx + (Math.random()-0.5)*30;
-    particles[idx].y = cy + (Math.random()-0.5)*30;
-    particles[idx].applyForce(Math.cos(a)*3, Math.sin(a)*3 - Math.abs(gravitySign)*1.2);
+    p.applyForce(Math.cos(a)*3, Math.sin(a)*3 * -gravitySign);
   }
-  spawnConfettiShort(cx,cy);
+  spawnConfettiShort(localX, localY);
 }
-
-// flip impulse so things visibly reverse when inverted
 function applyGlobalFlipImpulse(){
   for (let p of particles) p.applyForce((Math.random()-0.5)*0.8, -gravitySign * rand(0.6,1.6));
   if (snowObj) snowObj.applyForce((Math.random()-0.5)*1.6, -gravitySign * rand(0.9,2.6));
 }
 
-// minimal confetti at tap
+/* ---------- Confetti short (tap) ---------- */
 function spawnConfettiShort(cx,cy){
   const colors = ['#ffd166','#ff4d6d','#9ad4ff','#b39cff','#6ee7b7'];
   for (let i=0;i<18;i++){
@@ -475,13 +420,12 @@ function spawnConfettiShort(cx,cy){
     el.style.left = (cx/wrap.clientWidth*100) + '%';
     el.style.top = (cy/wrap.clientHeight*100) + '%';
     el.style.background = colors[i % colors.length];
-    el.style.transform = `rotate(${rand(0,360)}deg)`;
     confettiLayer.appendChild(el);
     const start = performance.now();
     const dur = rand(600,1100);
     (function anim(now){
       const t = (now-start)/dur;
-      if (t>1){ el.remove(); return; }
+      if (t > 1){ el.remove(); return; }
       const ease = Math.sin(t*Math.PI*0.5);
       const dx = rand(-80,80)*ease;
       const dy = rand(-200,-60)*(1-ease) + ease*(80);
@@ -491,30 +435,26 @@ function spawnConfettiShort(cx,cy){
   }
 }
 
-// ---------- CONFETTI (big) ----------
-function spawnConfetti(){
-  spawnConfetti(); // placeholder - we use animated elements in spawnConfettiShort and earlier spawn
+/* ---------- Main loop & startup ---------- */
+function initParticles(){
+  particles = [];
+  for (let i=0;i<PARTICLE_COUNT;i++) particles.push(new Particle(true));
 }
 
-// ---------- ANIMATION LOOP ----------
-let last = performance.now();
-function loop(time){
-  const dt = Math.min(0.033, (time - last)/1000);
-  last = time;
-
-  // update gravity based on sign
+let lastFrame = performance.now();
+function loop(nowTime){
+  const dt = Math.min(0.033, (nowTime - lastFrame)/1000);
+  lastFrame = nowTime;
   const g = GRAVITY_BASE * gravitySign;
 
-  // update particles
+  // update
   for (let p of particles) p.update(dt, g);
-
-  // update snow object
   if (snowObj) snowObj.update(dt, g);
 
   // render
   ctx.clearRect(0,0,canvas.width/DPR,canvas.height/DPR);
 
-  // draw background clipped to globe
+  // background clipped to globe
   ctx.save();
   ctx.beginPath();
   ctx.arc(CX, CY, R, 0, Math.PI*2);
@@ -522,13 +462,13 @@ function loop(time){
   if (bg.complete) ctx.drawImage(bg, 0, 0, W, H);
   ctx.restore();
 
-  // draw snow object under particles
+  // draw object below particles
   if (snowObj) snowObj.draw();
 
-  // draw particles above
+  // particles
   for (let p of particles) p.draw();
 
-  // glass glare overlay
+  // glass glare
   ctx.save();
   ctx.globalAlpha = 0.22;
   const g1 = ctx.createRadialGradient(CX - R*0.35, CY - R*0.45, 5, CX, CY, R*1.2);
@@ -544,27 +484,26 @@ function loop(time){
   ctx.strokeStyle = 'rgba(120,160,255,0.28)';
   ctx.beginPath(); ctx.arc(CX,CY,R-2,0,Math.PI*2); ctx.stroke();
   ctx.strokeStyle = 'rgba(190,130,255,0.22)';
-  ctx.lineWidth = Math.max(1, R*0.01); ctx.beginPath(); ctx.arc(CX,CY,R-4,0,Math.PI*2); ctx.stroke();
+  ctx.lineWidth = Math.max(1, R*0.01);
+  ctx.beginPath(); ctx.arc(CX,CY,R-4,0,Math.PI*2); ctx.stroke();
   ctx.restore();
 
   requestAnimationFrame(loop);
 }
 
-// ---------- start app after load ----------
-function launch(){
+/* ---------- Launch when images ready ---------- */
+function launchIfReady(){
+  if (!bg.complete || !objImg.complete) { setTimeout(launchIfReady,50); return; }
   resize();
   initParticles();
   snowObj = new SnowObject(objImg);
-  last = performance.now();
+  snowObj.placeInitial();
+  lastFrame = performance.now();
   requestAnimationFrame(loop);
 }
-function initParticles(){
-  particles = [];
-  for (let i=0;i<PARTICLE_COUNT;i++) particles.push(new Particle(true));
-}
-bg.onload = () => { if (objImg.complete) launch(); };
-objImg.onload = () => { if (bg.complete) launch(); };
-if (bg.complete && objImg.complete) launch();
+bg.onload = launchIfReady;
+objImg.onload = launchIfReady;
+if (bg.complete && objImg.complete) launchIfReady();
 
 </script>
 </body>
