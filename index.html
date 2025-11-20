@@ -1,178 +1,446 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="en">
 <head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Snow Globe — OpenSea Embed</title>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1.0,viewport-fit=cover" />
+<title>WebGL Snow Globe — Three.js</title>
 <style>
-  html, body { margin:0; padding:0; width:100%; height:100%; overflow:hidden; background:#071226; }
-  #globe-container { width:100%; height:100%; }
-  canvas { display:block; }
+  :root{
+    --bg:#071226;
+    --ui-bg: rgba(255,255,255,0.06);
+    --accent:#9ad4ff;
+    --panel: rgba(10,14,22,0.6);
+  }
+  html,body{height:100%;margin:0;background:var(--bg);font-family:Inter,system-ui,Arial;color:#fff; -webkit-font-smoothing:antialiased; -moz-osx-font-smoothing:grayscale;}
+  #app{height:100vh;display:flex;align-items:center;justify-content:center;padding:12px;box-sizing:border-box;}
+  .stage{width:100%;max-width:1000px;aspect-ratio:1/1;position:relative;border-radius:28px;overflow:hidden;box-shadow:0 20px 60px rgba(0,0,0,0.55);background:linear-gradient(180deg,#041220 0%, #08162a 100%);}
+  canvas{display:block;width:100%;height:100%}
+  .ui {
+    position:absolute;left:12px;top:12px;display:flex;gap:8px;flex-direction:row;align-items:center;z-index:50;
+    background:var(--panel);backdrop-filter: blur(8px);padding:8px;border-radius:12px;
+  }
+  .ui button, .ui select { background:transparent;border:1px solid rgba(255,255,255,0.06);color:#fff;padding:8px 10px;border-radius:10px;cursor:pointer; }
+  .bottom-ui{position:absolute;left:12px;bottom:12px;display:flex;gap:8px;align-items:center;background:var(--panel);padding:8px;border-radius:12px;}
+  .label{font-size:13px;color:#d8e9ff;margin-right:6px}
+  .small{font-size:13px;padding:6px 8px}
+  .theme-select{padding:6px;border-radius:8px}
+  .hint{position:absolute;right:12px;bottom:12px;background:linear-gradient(180deg, rgba(0,0,0,0.3), rgba(255,255,255,0.02));padding:8px;border-radius:10px;font-size:13px;color:#cfe9ff;opacity:0.95}
+  @media (max-width:600px){
+    .ui{left:8px;top:8px;padding:6px}
+    .bottom-ui{left:8px;bottom:8px;padding:6px}
+  }
 </style>
 </head>
 <body>
-<div id="globe-container"></div>
+<div id="app">
+  <div class="stage" id="stage">
+    <div class="ui">
+      <button id="motionBtn" class="small">Enable Motion</button>
+      <select id="themeSelect" class="theme-select small" title="Particle Theme">
+        <option value="snow">Snow</option>
+        <option value="glitter">Glitter</option>
+        <option value="confetti">Confetti</option>
+        <option value="sparkles">Sparkles</option>
+      </select>
+      <button id="burstBtn" class="small">Tap Burst</button>
+      <button id="resetBtn" class="small">Reset</button>
+    </div>
+    <div class="bottom-ui">
+      <div class="label">Intensity</div>
+      <input id="intensity" type="range" min="0" max="200" value="60">
+    </div>
+    <div class="hint">Swipe left/right repeatedly or shake device to swirl. Tap globe to burst particles.</div>
+    <!-- WebGL canvas injected by script -->
+  </div>
+</div>
 
 <script type="module">
-// -----------------------------
-// Three.js + Postprocessing via CDN
-// -----------------------------
 import * as THREE from 'https://cdn.jsdelivr.net/npm/three@0.164.1/build/three.module.js';
 import { OrbitControls } from 'https://cdn.jsdelivr.net/npm/three@0.164.1/examples/jsm/controls/OrbitControls.js';
 import { EffectComposer } from 'https://cdn.jsdelivr.net/npm/three@0.164.1/examples/jsm/postprocessing/EffectComposer.js';
 import { RenderPass } from 'https://cdn.jsdelivr.net/npm/three@0.164.1/examples/jsm/postprocessing/RenderPass.js';
 import { UnrealBloomPass } from 'https://cdn.jsdelivr.net/npm/three@0.164.1/examples/jsm/postprocessing/UnrealBloomPass.js';
+import { SMAAPass } from 'https://cdn.jsdelivr.net/npm/three@0.164.1/examples/jsm/postprocessing/SMAAPass.js';
+
+const stage = document.getElementById('stage');
+const motionBtn = document.getElementById('motionBtn');
+const themeSelect = document.getElementById('themeSelect');
+const burstBtn = document.getElementById('burstBtn');
+const resetBtn = document.getElementById('resetBtn');
+const intensityControl = document.getElementById('intensity');
+
+let renderer, scene, camera, composer, bloomPass;
+let globeGroup, glassMesh, innerMesh;
+let particleSystem, particleUniforms;
+let clock = new THREE.Clock();
+
+// Config
+const IMAGE_PATH = 'image1.png';
+const PARTICLE_COUNT = 2500;
+const PARTICLE_AREA_RADIUS = 0.44;
+let baseIntensity = parseFloat(intensityControl.value);
 
 // -----------------------------
-// Setup scene, camera, renderer
+// Particle State
 // -----------------------------
-const container = document.getElementById('globe-container');
-const scene = new THREE.Scene();
-
-const camera = new THREE.PerspectiveCamera(40, container.clientWidth / container.clientHeight, 0.1, 100);
-camera.position.set(0, 0.5, 2.2);
-
-const renderer = new THREE.WebGLRenderer({ antialias: true, alpha:true });
-renderer.setSize(container.clientWidth, container.clientHeight);
-renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
-container.appendChild(renderer.domElement);
-
-// OrbitControls (optional, subtle movement)
-const controls = new OrbitControls(camera, renderer.domElement);
-controls.enablePan = false;
-controls.enableZoom = false;
-controls.enableDamping = true;
-controls.minPolarAngle = Math.PI/2 - 0.8;
-controls.maxPolarAngle = Math.PI/2 + 0.8;
+const state = {
+  velocities: null,
+  settled: new Uint8Array(PARTICLE_COUNT),
+  theme: 'snow',
+  wobble: new THREE.Vector3(),
+  globeRotationVel: new THREE.Vector3()
+};
 
 // -----------------------------
-// Lighting
+// Init Scene
 // -----------------------------
-const hemi = new THREE.HemisphereLight(0xffffff, 0x444444, 0.7);
-scene.add(hemi);
-const dir = new THREE.DirectionalLight(0xffffff, 0.6);
-dir.position.set(2,3,2);
-scene.add(dir);
+function init() {
+  renderer = new THREE.WebGLRenderer({ antialias:true, alpha:true });
+  renderer.setPixelRatio(Math.min(window.devicePixelRatio,2));
+  renderer.setSize(stage.clientWidth, stage.clientHeight);
+  stage.appendChild(renderer.domElement);
 
-// -----------------------------
-// Globe geometry & glass
-// -----------------------------
-const globeGroup = new THREE.Group();
-scene.add(globeGroup);
+  scene = new THREE.Scene();
+  camera = new THREE.PerspectiveCamera(40, stage.clientWidth/stage.clientHeight, 0.1, 100);
+  camera.position.set(0,0.5,2.2);
 
-// inner globe
-const innerGeo = new THREE.SphereGeometry(1,64,64);
-const innerMat = new THREE.MeshStandardMaterial({
-  color:0x041220,
-  roughness:1,
-  metalness:0
-});
-const innerMesh = new THREE.Mesh(innerGeo, innerMat);
-innerMesh.scale.set(0.995,0.995,0.995);
-globeGroup.add(innerMesh);
+  const controls = new OrbitControls(camera, renderer.domElement);
+  controls.enablePan = false;
+  controls.enableZoom = false;
+  controls.enableDamping = true;
+  controls.minPolarAngle = Math.PI/2-0.8;
+  controls.maxPolarAngle = Math.PI/2+0.8;
+  controls.target.set(0,0,0);
 
-// glass overlay
-const glassGeo = new THREE.SphereGeometry(1.01,64,64);
-const glassMat = new THREE.MeshPhysicalMaterial({
-  color:0xffffff,
-  metalness:0,
-  roughness:0.05,
-  transmission:0.9,
-  thickness:0.5,
-  clearcoat:0.6,
-  clearcoatRoughness:0.05,
-  reflectivity:0.3,
-  opacity:0.98,
-  transparent:true
-});
-const glassMesh = new THREE.Mesh(glassGeo, glassMat);
-globeGroup.add(glassMesh);
+  // Lights
+  const hemi = new THREE.HemisphereLight(0xffffff, 0x444444, 0.7);
+  scene.add(hemi);
+  const dir = new THREE.DirectionalLight(0xffffff,0.6);
+  dir.position.set(2,3,2);
+  scene.add(dir);
 
-// -----------------------------
-// Particle system (snow)
-// -----------------------------
-const PARTICLE_COUNT = 800; // lighter for mobile/iframe
-const particleGeo = new THREE.BufferGeometry();
-const positions = new Float32Array(PARTICLE_COUNT * 3);
-const velocities = new Float32Array(PARTICLE_COUNT * 3);
-for(let i=0;i<PARTICLE_COUNT;i++){
-  const theta = Math.random() * Math.PI*2;
-  const phi = Math.acos(Math.random()*2 -1);
-  const r = 0.7 + Math.random()*0.3;
-  positions[i*3] = r*Math.sin(phi)*Math.cos(theta);
-  positions[i*3+1] = r*Math.cos(phi);
-  positions[i*3+2] = r*Math.sin(phi)*Math.sin(theta);
-  velocities[i*3] = (Math.random()-0.5)*0.002;
-  velocities[i*3+1] = -Math.random()*0.002;
-  velocities[i*3+2] = (Math.random()-0.5)*0.002;
+  globeGroup = new THREE.Group();
+  scene.add(globeGroup);
+
+  // Inner Sphere
+  const texLoader = new THREE.TextureLoader();
+  const bgTex = texLoader.load(IMAGE_PATH);
+  bgTex.encoding = THREE.sRGBEncoding;
+  const innerGeo = new THREE.SphereGeometry(1,64,64);
+  const innerMat = new THREE.MeshStandardMaterial({ map:bgTex, side:THREE.BackSide, roughness:1, metalness:0 });
+  innerMesh = new THREE.Mesh(innerGeo, innerMat);
+  innerMesh.scale.set(0.995,0.995,0.995);
+  globeGroup.add(innerMesh);
+
+  // Glass Sphere
+  const glassGeo = new THREE.SphereGeometry(1.01,64,64);
+  const glassMat = new THREE.MeshPhysicalMaterial({
+    color:0xffffff, metalness:0, roughness:0.05, transmission:0.9, thickness:0.5,
+    envMapIntensity:0.8, clearcoat:0.6, clearcoatRoughness:0.05,
+    reflectivity:0.3, opacity:0.98, transparent:true
+  });
+  glassMesh = new THREE.Mesh(glassGeo, glassMat);
+  globeGroup.add(glassMesh);
+
+  // Base
+  const baseGeo = new THREE.CylinderGeometry(1.08,1.2,0.35,48);
+  const baseMat = new THREE.MeshStandardMaterial({ color:0x111214, metalness:0.2, roughness:0.6 });
+  const base = new THREE.Mesh(baseGeo, baseMat);
+  base.position.set(0,-1.2,0);
+  globeGroup.add(base);
+
+  createParticles();
+
+  // Postprocessing
+  composer = new EffectComposer(renderer);
+  composer.addPass(new RenderPass(scene, camera));
+  bloomPass = new UnrealBloomPass(new THREE.Vector2(stage.clientWidth, stage.clientHeight),0.9,0.4,0.1);
+  bloomPass.threshold = 0.15;
+  bloomPass.strength = 0.9;
+  bloomPass.radius = 0.6;
+  composer.addPass(bloomPass);
+  composer.addPass(new SMAAPass(stage.clientWidth*renderer.getPixelRatio(), stage.clientHeight*renderer.getPixelRatio()));
+
+  // Events
+  window.addEventListener('resize', onResize);
+  renderer.domElement.addEventListener('pointerdown', onPointerDown);
+  renderer.domElement.addEventListener('pointerup', onPointerUp);
+  renderer.domElement.addEventListener('pointermove', onPointerMove);
+
+  setupSwipeAndShake();
+  intensityControl.addEventListener('input', e=>baseIntensity=parseFloat(e.target.value));
+  themeSelect.addEventListener('change', e=>setTheme(e.target.value));
+  burstBtn.addEventListener('click', ()=>triggerBurst(1.6));
+  resetBtn.addEventListener('click', resetParticles);
+  motionBtn.addEventListener('click', requestMotionPermission);
+
+  animate();
 }
-particleGeo.setAttribute('position', new THREE.BufferAttribute(positions,3));
-particleGeo.setAttribute('velocity', new THREE.BufferAttribute(velocities,3));
-
-const particleMat = new THREE.PointsMaterial({
-  color:0xffffff,
-  size:0.02,
-  transparent:true,
-  opacity:0.8,
-  blending:THREE.AdditiveBlending,
-  depthWrite:false
-});
-
-const particles = new THREE.Points(particleGeo, particleMat);
-globeGroup.add(particles);
 
 // -----------------------------
-// Postprocessing (bloom)
+// Particles
 // -----------------------------
-const composer = new EffectComposer(renderer);
-composer.addPass(new RenderPass(scene,camera));
-const bloom = new UnrealBloomPass(new THREE.Vector2(container.clientWidth, container.clientHeight),0.9,0.4,0.1);
-composer.addPass(bloom);
+function createParticles() {
+  const geometry = new THREE.BufferGeometry();
+  const positions = new Float32Array(PARTICLE_COUNT*3);
+  const velocities = new Float32Array(PARTICLE_COUNT*3);
+  const sizes = new Float32Array(PARTICLE_COUNT);
+  const seeds = new Float32Array(PARTICLE_COUNT);
+
+  for(let i=0;i<PARTICLE_COUNT;i++){
+    const theta=Math.random()*Math.PI*2;
+    const phi=Math.acos(Math.random()*0.8-0.4);
+    const r=0.7*(0.4+Math.random()*0.6)*PARTICLE_AREA_RADIUS;
+    positions[i*3]=r*Math.sin(phi)*Math.cos(theta);
+    positions[i*3+1]=r*Math.cos(phi);
+    positions[i*3+2]=r*Math.sin(phi)*Math.sin(theta);
+    velocities[i*3]=(Math.random()-0.5)*0.002;
+    velocities[i*3+1]=(Math.random()-0.2)*0.002;
+    velocities[i*3+2]=(Math.random()-0.5)*0.002;
+    sizes[i]=Math.random()*6+2.5;
+    seeds[i]=Math.random()*1000;
+  }
+
+  geometry.setAttribute('position', new THREE.BufferAttribute(positions,3));
+  geometry.setAttribute('aVelocity', new THREE.BufferAttribute(velocities,3));
+  geometry.setAttribute('aSize', new THREE.BufferAttribute(sizes,1));
+  geometry.setAttribute('aSeed', new THREE.BufferAttribute(seeds,1));
+
+  particleUniforms={
+    uTime:{value:0},
+    uPointSize:{value:1},
+    uThemeColor:{value:new THREE.Color(0xffffff)},
+    uPixelRatio:{value:window.devicePixelRatio||1}
+  };
+
+  const vertexShader=`
+    attribute vec3 aVelocity;
+    attribute float aSize;
+    attribute float aSeed;
+    uniform float uTime;
+    uniform float uPointSize;
+    uniform float uPixelRatio;
+    varying float vSeed;
+    varying float vAlpha;
+    void main(){
+      vSeed=aSeed;
+      float t=uTime*0.6+aSeed;
+      vec3 pos=position;
+      pos.x+=sin(t*0.7)*0.003;
+      pos.z+=cos(t*0.9)*0.003;
+      vec4 mvPosition=modelViewMatrix*vec4(pos,1.0);
+      gl_PointSize=aSize*uPointSize*uPixelRatio;
+      gl_Position=projectionMatrix*mvPosition;
+      vAlpha=1.0;
+    }
+  `;
+
+  const fragmentShader=`
+    precision mediump float;
+    uniform vec3 uThemeColor;
+    varying float vSeed;
+    varying float vAlpha;
+    void main(){
+      float r=length(gl_PointCoord-vec2(0.5));
+      float mask=smoothstep(0.5,0.0,r);
+      float sparkle=step(0.98,fract(vSeed*37.0));
+      vec3 col=uThemeColor;
+      float alpha=mask*(0.8+0.4*sparkle);
+      gl_FragColor=vec4(col*alpha,alpha);
+    }
+  `;
+
+  const material=new THREE.ShaderMaterial({
+    uniforms:particleUniforms,
+    vertexShader:vertexShader,
+    fragmentShader:fragmentShader,
+    transparent:true,
+    depthTest:true,
+    blending:THREE.AdditiveBlending
+  });
+
+  particleSystem=new THREE.Points(geometry,material);
+  particleSystem.frustumCulled=false;
+  globeGroup.add(particleSystem);
+
+  // Initialize state velocities
+  state.velocities=new Float32Array(velocities);
+}
 
 // -----------------------------
-// Animation
+// Particle Physics
 // -----------------------------
-function animate() {
-  requestAnimationFrame(animate);
+function updateParticlesPhysics(delta){
+  const geom=particleSystem.geometry;
+  const pos=geom.getAttribute('position').array;
+  const vel=state.velocities;
+  const globeRadius=1.0;
+  const intensity=baseIntensity*0.02+(baseIntensity*0.002);
 
-  // update particles
-  const pos = particleGeo.getAttribute('position');
-  const vel = particleGeo.getAttribute('velocity');
   for(let i=0;i<PARTICLE_COUNT;i++){
     const j=i*3;
-    pos.array[j] += vel.array[j];
-    pos.array[j+1] += vel.array[j+1];
-    pos.array[j+2] += vel.array[j+2];
+    vel[j]+=(Math.random()-0.5)*0.0006*(1+intensity*0.02);
+    vel[j+1]+=(Math.random()-0.5)*0.0006*(1+intensity*0.02);
+    vel[j+2]+=(Math.random()-0.5)*0.0006*(1+intensity*0.02);
 
-    // gravity
-    vel.array[j+1] -= 0.0001;
+    vel[j+1]-=0.0009*(1+intensity*0.003);
 
-    // reset if below globe bottom
-    if(pos.array[j+1]<-1) {
-      pos.array[j+1]=1;
-      pos.array[j] = (Math.random()-0.5)*1.5;
-      pos.array[j+2] = (Math.random()-0.5)*1.5;
-      vel.array[j+1] = -Math.random()*0.002;
+    vel[j]*=0.985; vel[j+1]*=0.985; vel[j+2]*=0.985;
+
+    vel[j]+=state.wobble.x*(Math.random()*0.6+0.2);
+    vel[j+1]+=state.wobble.y*(Math.random()*0.8+0.2);
+    vel[j+2]+=state.wobble.z*(Math.random()*0.6+0.2);
+
+    pos[j]+=vel[j]*delta*60;
+    pos[j+1]+=vel[j+1]*delta*60;
+    pos[j+2]+=vel[j+2]*delta*60;
+
+    const rr=Math.sqrt(pos[j]*pos[j]+pos[j+1]*pos[j+1]+pos[j+2]*pos[j+2]);
+    if(rr>(globeRadius-0.04)){
+      const nx=pos[j]/rr, ny=pos[j+1]/rr, nz=pos[j+2]/rr;
+      pos[j]=nx*(globeRadius-0.04);
+      pos[j+1]=ny*(globeRadius-0.04);
+      pos[j+2]=nz*(globeRadius-0.04);
+      const dot=vel[j]*nx+vel[j+1]*ny+vel[j+2]*nz;
+      vel[j]-=1.8*dot*nx; vel[j+1]-=1.8*dot*ny; vel[j+2]-=1.8*dot*nz;
+      vel[j]*=0.6; vel[j+1]*=0.6; vel[j+2]*=0.6;
+    }
+
+    if(pos[j+1]<-0.65 && Math.hypot(vel[j],vel[j+1],vel[j+2])<0.0005){
+      const targetY=-0.92+(Math.random()*0.02);
+      pos[j+1]=THREE.MathUtils.lerp(pos[j+1],targetY,0.02);
+      vel[j]*=0.5; vel[j+1]*=0.5; vel[j+2]*=0.5;
     }
   }
-  pos.needsUpdate = true;
+  geom.getAttribute('position').needsUpdate=true;
 
-  // gentle globe rotation
-  globeGroup.rotation.y += 0.001;
-
-  composer.render();
+  state.wobble.multiplyScalar(0.92);
+  globeGroup.rotation.x+=state.globeRotationVel.x*delta;
+  globeGroup.rotation.y+=state.globeRotationVel.y*delta;
+  globeGroup.rotation.z+=state.globeRotationVel.z*delta;
+  state.globeRotationVel.multiplyScalar(0.95);
 }
-animate();
+
+// -----------------------------
+// UI & Interaction
+// -----------------------------
+let isPointerDown=false;
+let pointerStart={x:0,y:0,t:0};
+let swipeHistory=[];
+
+function onPointerDown(e){
+  isPointerDown=true;
+  pointerStart.x=e.clientX||e.touches?.[0]?.clientX;
+  pointerStart.y=e.clientY||e.touches?.[0]?.clientY;
+  pointerStart.t=performance.now();
+}
+function onPointerUp(e){
+  isPointerDown=false;
+  const dx=(e.clientX||(e.changedTouches?.[0]?.clientX||pointerStart.x))-pointerStart.x;
+  const dt=performance.now()-pointerStart.t;
+  if(Math.abs(dx)<8 && dt<200) triggerBurst(1.8);
+}
+function onPointerMove(e){
+  const x=e.clientX||(e.touches?.[0]?.clientX);
+  if(x!==undefined){
+    swipeHistory.push({x:x,t:performance.now()});
+    const now=performance.now();
+    swipeHistory=swipeHistory.filter(s=>now-s.t<800);
+    if(swipeHistory.length>6){
+      let dirs=[];
+      for(let i=1;i<swipeHistory.length;i++){
+        const dx=swipeHistory[i].x-swipeHistory[i-1].x;
+        if(Math.abs(dx)>20) dirs.push(dx>0?1:-1);
+      }
+      let changes=0;
+      for(let i=1;i<dirs.length;i++) if(dirs[i]!==dirs[i-1]) changes++;
+      if(changes>=3){
+        const dir=(swipeHistory[swipeHistory.length-1].x-swipeHistory[0].x)>0?1:-1;
+        state.globeRotationVel.y+=dir*0.08;
+        swipeHistory=[];
+      }
+    }
+  }
+}
+
+function triggerBurst(strength=1.2){
+  const geom=particleSystem.geometry;
+  const vel=state.velocities;
+  for(let i=0;i<PARTICLE_COUNT;i++){
+    const j=i*3;
+    vel[j]+=strength*(Math.random()-0.5);
+    vel[j+1]+=strength*(Math.random()-0.2);
+    vel[j+2]+=strength*(Math.random()-0.5);
+  }
+}
+
+function resetParticles(){
+  globeGroup.rotation.set(0,0,0);
+  createParticles();
+}
+
+function setTheme(theme){
+  state.theme=theme;
+  let color=0xffffff;
+  switch(theme){
+    case 'snow': color=0xffffff; break;
+    case 'glitter': color=0xffd700; break;
+    case 'confetti': color=0xff3c7e; break;
+    case 'sparkles': color=0x9ad4ff; break;
+  }
+  particleUniforms.uThemeColor.value.set(color);
+}
+
+// -----------------------------
+// Motion
+// -----------------------------
+function requestMotionPermission(){
+  if(typeof DeviceMotionEvent!=='undefined' && typeof DeviceMotionEvent.requestPermission==='function'){
+    DeviceMotionEvent.requestPermission().then(resp=>{
+      if(resp==='granted') setupMotionListener();
+    });
+  } else setupMotionListener();
+}
+function setupMotionListener(){
+  window.addEventListener('deviceorientation', e=>{
+    state.globeRotationVel.x+=THREE.MathUtils.degToRad(e.gamma||0)*0.002;
+    state.globeRotationVel.y+=THREE.MathUtils.degToRad(e.alpha||0)*0.002;
+    state.globeRotationVel.z+=THREE.MathUtils.degToRad(e.beta||0)*0.002;
+  });
+}
+function setupSwipeAndShake(){
+  if(window.DeviceMotionEvent){
+    window.addEventListener('devicemotion', e=>{
+      const a=e.accelerationIncludingGravity;
+      const mag=Math.hypot(a.x,a.y,a.z);
+      if(mag>1.2) triggerBurst(mag*0.3);
+    });
+  }
+}
+
+// -----------------------------
+// Animation Loop
+// -----------------------------
+function animate(){
+  const delta=clock.getDelta();
+  particleUniforms.uTime.value+=delta;
+  updateParticlesPhysics(delta);
+  composer.render();
+  requestAnimationFrame(animate);
+}
 
 // -----------------------------
 // Resize
 // -----------------------------
-window.addEventListener('resize', ()=>{
-  camera.aspect = container.clientWidth/container.clientHeight;
+function onResize(){
+  const w=stage.clientWidth, h=stage.clientHeight;
+  camera.aspect=w/h;
   camera.updateProjectionMatrix();
-  renderer.setSize(container.clientWidth, container.clientHeight);
-  composer.setSize(container.clientWidth, container.clientHeight);
-});
+  renderer.setSize(w,h);
+  composer.setSize(w,h);
+}
+
+init();
 </script>
 </body>
 </html>
