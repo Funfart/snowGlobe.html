@@ -50,6 +50,7 @@
       <input id="intensity" type="range" min="0" max="200" value="60">
     </div>
     <div class="hint">Swipe left/right repeatedly or shake device to swirl. Tap globe to burst particles.</div>
+    <!-- WebGL canvas injected by script -->
   </div>
 </div>
 
@@ -72,27 +73,31 @@ let renderer, scene, camera, composer, bloomPass;
 let globeGroup, glassMesh, innerMesh;
 let particleSystem, particleUniforms;
 let clock = new THREE.Clock();
-let PARTICLE_COUNT = window.innerWidth < 600 ? 1000 : 2500; // lighter mobile mode
+
+// Config
+const IMAGE_PATH = 'image1.png';
+const PARTICLE_COUNT = 2500;
+const PARTICLE_AREA_RADIUS = 0.44;
 let baseIntensity = parseFloat(intensityControl.value);
 
-const IMAGE_PATH = 'image1.png';
-const PARTICLE_AREA_RADIUS = 0.44;
-
+// -----------------------------
+// Particle State
+// -----------------------------
 const state = {
   velocities: null,
   settled: new Uint8Array(PARTICLE_COUNT),
   theme: 'snow',
-  wobble: new THREE.Vector3(0,0,0),
-  globeRotationVel: new THREE.Vector3(0,0,0)
+  wobble: new THREE.Vector3(),
+  globeRotationVel: new THREE.Vector3()
 };
 
-init();
-
+// -----------------------------
+// Init Scene
+// -----------------------------
 function init() {
-  renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
-  renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+  renderer = new THREE.WebGLRenderer({ antialias:true, alpha:true });
+  renderer.setPixelRatio(Math.min(window.devicePixelRatio,2));
   renderer.setSize(stage.clientWidth, stage.clientHeight);
-  renderer.outputEncoding = THREE.sRGBEncoding;
   stage.appendChild(renderer.domElement);
 
   scene = new THREE.Scene();
@@ -100,38 +105,63 @@ function init() {
   camera.position.set(0,0.5,2.2);
 
   const controls = new OrbitControls(camera, renderer.domElement);
-  controls.enablePan = false; controls.enableZoom = false; controls.enableDamping = true;
-  controls.minPolarAngle = Math.PI/2 - 0.8;
-  controls.maxPolarAngle = Math.PI/2 + 0.8;
+  controls.enablePan = false;
+  controls.enableZoom = false;
+  controls.enableDamping = true;
+  controls.minPolarAngle = Math.PI/2-0.8;
+  controls.maxPolarAngle = Math.PI/2+0.8;
   controls.target.set(0,0,0);
 
-  scene.add(new THREE.HemisphereLight(0xffffff, 0x444444, 0.7));
-  const dir = new THREE.DirectionalLight(0xffffff,0.6); dir.position.set(2,3,2); scene.add(dir);
+  // Lights
+  const hemi = new THREE.HemisphereLight(0xffffff, 0x444444, 0.7);
+  scene.add(hemi);
+  const dir = new THREE.DirectionalLight(0xffffff,0.6);
+  dir.position.set(2,3,2);
+  scene.add(dir);
 
-  globeGroup = new THREE.Group(); scene.add(globeGroup);
+  globeGroup = new THREE.Group();
+  scene.add(globeGroup);
 
+  // Inner Sphere
   const texLoader = new THREE.TextureLoader();
   const bgTex = texLoader.load(IMAGE_PATH);
   bgTex.encoding = THREE.sRGBEncoding;
-  innerMesh = new THREE.Mesh(new THREE.SphereGeometry(1,64,64),
-    new THREE.MeshStandardMaterial({map:bgTex,side:THREE.BackSide,roughness:1,metalness:0}));
-  innerMesh.scale.set(0.995,0.995,0.995); globeGroup.add(innerMesh);
+  const innerGeo = new THREE.SphereGeometry(1,64,64);
+  const innerMat = new THREE.MeshStandardMaterial({ map:bgTex, side:THREE.BackSide, roughness:1, metalness:0 });
+  innerMesh = new THREE.Mesh(innerGeo, innerMat);
+  innerMesh.scale.set(0.995,0.995,0.995);
+  globeGroup.add(innerMesh);
 
-  glassMesh = new THREE.Mesh(new THREE.SphereGeometry(1.01,64,64),
-    new THREE.MeshPhysicalMaterial({color:0xffffff,metalness:0,roughness:0.05,transmission:0.9,thickness:0.5,envMapIntensity:0.8,clearcoat:0.6,clearcoatRoughness:0.05,reflectivity:0.3,opacity:0.98,transparent:true}));
+  // Glass Sphere
+  const glassGeo = new THREE.SphereGeometry(1.01,64,64);
+  const glassMat = new THREE.MeshPhysicalMaterial({
+    color:0xffffff, metalness:0, roughness:0.05, transmission:0.9, thickness:0.5,
+    envMapIntensity:0.8, clearcoat:0.6, clearcoatRoughness:0.05,
+    reflectivity:0.3, opacity:0.98, transparent:true
+  });
+  glassMesh = new THREE.Mesh(glassGeo, glassMat);
   globeGroup.add(glassMesh);
 
-  const base = new THREE.Mesh(new THREE.CylinderGeometry(1.08,1.2,0.35,48), new THREE.MeshStandardMaterial({color:0x111214,metalness:0.2,roughness:0.6}));
-  base.position.set(0,-1.2,0); globeGroup.add(base);
+  // Base
+  const baseGeo = new THREE.CylinderGeometry(1.08,1.2,0.35,48);
+  const baseMat = new THREE.MeshStandardMaterial({ color:0x111214, metalness:0.2, roughness:0.6 });
+  const base = new THREE.Mesh(baseGeo, baseMat);
+  base.position.set(0,-1.2,0);
+  globeGroup.add(base);
 
   createParticles();
 
+  // Postprocessing
   composer = new EffectComposer(renderer);
-  composer.addPass(new RenderPass(scene,camera));
-  bloomPass = new UnrealBloomPass(new THREE.Vector2(stage.clientWidth,stage.clientHeight), 0.9, 0.4, 0.1);
-  bloomPass.threshold=0.15; bloomPass.strength=0.9; bloomPass.radius=0.6; composer.addPass(bloomPass);
+  composer.addPass(new RenderPass(scene, camera));
+  bloomPass = new UnrealBloomPass(new THREE.Vector2(stage.clientWidth, stage.clientHeight),0.9,0.4,0.1);
+  bloomPass.threshold = 0.15;
+  bloomPass.strength = 0.9;
+  bloomPass.radius = 0.6;
+  composer.addPass(bloomPass);
   composer.addPass(new SMAAPass(stage.clientWidth*renderer.getPixelRatio(), stage.clientHeight*renderer.getPixelRatio()));
 
+  // Events
   window.addEventListener('resize', onResize);
   renderer.domElement.addEventListener('pointerdown', onPointerDown);
   renderer.domElement.addEventListener('pointerup', onPointerUp);
@@ -145,11 +175,10 @@ function init() {
   motionBtn.addEventListener('click', requestMotionPermission);
 
   animate();
-  setTheme('snow');
 }
 
 // -----------------------------
-// Particle System
+// Particles
 // -----------------------------
 function createParticles() {
   const geometry = new THREE.BufferGeometry();
@@ -162,8 +191,9 @@ function createParticles() {
     const theta=Math.random()*Math.PI*2;
     const phi=Math.acos(Math.random()*0.8-0.4);
     const r=0.7*(0.4+Math.random()*0.6)*PARTICLE_AREA_RADIUS;
-    const x=r*Math.sin(phi)*Math.cos(theta), y=r*Math.cos(phi), z=r*Math.sin(phi)*Math.sin(theta);
-    positions[i*3]=x; positions[i*3+1]=y; positions[i*3+2]=z;
+    positions[i*3]=r*Math.sin(phi)*Math.cos(theta);
+    positions[i*3+1]=r*Math.cos(phi);
+    positions[i*3+2]=r*Math.sin(phi)*Math.sin(theta);
     velocities[i*3]=(Math.random()-0.5)*0.002;
     velocities[i*3+1]=(Math.random()-0.2)*0.002;
     velocities[i*3+2]=(Math.random()-0.5)*0.002;
@@ -176,11 +206,14 @@ function createParticles() {
   geometry.setAttribute('aSize', new THREE.BufferAttribute(sizes,1));
   geometry.setAttribute('aSeed', new THREE.BufferAttribute(seeds,1));
 
-  particleUniforms = {
-    uTime:{value:0}, uPointSize:{value:1.0}, uThemeColor:{value:new THREE.Color(0xffffff)}, uPixelRatio:{value:window.devicePixelRatio||1}
+  particleUniforms={
+    uTime:{value:0},
+    uPointSize:{value:1},
+    uThemeColor:{value:new THREE.Color(0xffffff)},
+    uPixelRatio:{value:window.devicePixelRatio||1}
   };
 
-  const vertexShader = `
+  const vertexShader=`
     attribute vec3 aVelocity;
     attribute float aSize;
     attribute float aSeed;
@@ -190,74 +223,84 @@ function createParticles() {
     varying float vSeed;
     varying float vAlpha;
     void main(){
-      vSeed = aSeed;
-      float t = uTime*0.6+aSeed;
-      vec3 pos = position;
-      pos.x += sin(t*0.7)*0.003; pos.z += cos(t*0.9)*0.003;
-      vec4 mvPosition = modelViewMatrix*vec4(pos,1.0);
-      gl_PointSize = aSize*uPointSize*uPixelRatio;
-      gl_Position = projectionMatrix*mvPosition;
+      vSeed=aSeed;
+      float t=uTime*0.6+aSeed;
+      vec3 pos=position;
+      pos.x+=sin(t*0.7)*0.003;
+      pos.z+=cos(t*0.9)*0.003;
+      vec4 mvPosition=modelViewMatrix*vec4(pos,1.0);
+      gl_PointSize=aSize*uPointSize*uPixelRatio;
+      gl_Position=projectionMatrix*mvPosition;
       vAlpha=1.0;
     }
   `;
-  const fragmentShader = `
+
+  const fragmentShader=`
     precision mediump float;
     uniform vec3 uThemeColor;
     varying float vSeed;
     varying float vAlpha;
     void main(){
-      float r = length(gl_PointCoord-vec2(0.5));
-      float mask = smoothstep(0.5,0.0,r);
-      float sparkle = step(0.98, fract(vSeed*37.0));
-      vec3 col = uThemeColor;
-      float alpha = mask*(0.8+0.4*sparkle);
-      gl_FragColor = vec4(col*alpha, alpha);
+      float r=length(gl_PointCoord-vec2(0.5));
+      float mask=smoothstep(0.5,0.0,r);
+      float sparkle=step(0.98,fract(vSeed*37.0));
+      vec3 col=uThemeColor;
+      float alpha=mask*(0.8+0.4*sparkle);
+      gl_FragColor=vec4(col*alpha,alpha);
     }
   `;
 
-  particleSystem = new THREE.Points(geometry, new THREE.ShaderMaterial({
+  const material=new THREE.ShaderMaterial({
     uniforms:particleUniforms,
     vertexShader:vertexShader,
     fragmentShader:fragmentShader,
     transparent:true,
     depthTest:true,
     blending:THREE.AdditiveBlending
-  }));
+  });
 
+  particleSystem=new THREE.Points(geometry,material);
   particleSystem.frustumCulled=false;
   globeGroup.add(particleSystem);
 
-  // save velocities
-  state.velocities = new Float32Array(velocities);
+  // Initialize state velocities
+  state.velocities=new Float32Array(velocities);
 }
 
 // -----------------------------
-// Particle Physics Update
+// Particle Physics
 // -----------------------------
 function updateParticlesPhysics(delta){
-  const geom = particleSystem.geometry;
-  const pos = geom.getAttribute('position').array;
-  const vel = state.velocities;
-  const intensity = baseIntensity*0.02+(baseIntensity*0.002);
-  const globeRadius = 1.0;
+  const geom=particleSystem.geometry;
+  const pos=geom.getAttribute('position').array;
+  const vel=state.velocities;
+  const globeRadius=1.0;
+  const intensity=baseIntensity*0.02+(baseIntensity*0.002);
 
   for(let i=0;i<PARTICLE_COUNT;i++){
     const j=i*3;
     vel[j]+=(Math.random()-0.5)*0.0006*(1+intensity*0.02);
     vel[j+1]+=(Math.random()-0.5)*0.0006*(1+intensity*0.02);
     vel[j+2]+=(Math.random()-0.5)*0.0006*(1+intensity*0.02);
+
     vel[j+1]-=0.0009*(1+intensity*0.003);
+
     vel[j]*=0.985; vel[j+1]*=0.985; vel[j+2]*=0.985;
+
     vel[j]+=state.wobble.x*(Math.random()*0.6+0.2);
     vel[j+1]+=state.wobble.y*(Math.random()*0.8+0.2);
     vel[j+2]+=state.wobble.z*(Math.random()*0.6+0.2);
 
-    pos[j]+=vel[j]*delta*60; pos[j+1]+=vel[j+1]*delta*60; pos[j+2]+=vel[j+2]*delta*60;
+    pos[j]+=vel[j]*delta*60;
+    pos[j+1]+=vel[j+1]*delta*60;
+    pos[j+2]+=vel[j+2]*delta*60;
 
-    const rr = Math.sqrt(pos[j]*pos[j]+pos[j+1]*pos[j+1]+pos[j+2]*pos[j+2]);
+    const rr=Math.sqrt(pos[j]*pos[j]+pos[j+1]*pos[j+1]+pos[j+2]*pos[j+2]);
     if(rr>(globeRadius-0.04)){
       const nx=pos[j]/rr, ny=pos[j+1]/rr, nz=pos[j+2]/rr;
-      pos[j]=nx*(globeRadius-0.04); pos[j+1]=ny*(globeRadius-0.04); pos[j+2]=nz*(globeRadius-0.04);
+      pos[j]=nx*(globeRadius-0.04);
+      pos[j+1]=ny*(globeRadius-0.04);
+      pos[j+2]=nz*(globeRadius-0.04);
       const dot=vel[j]*nx+vel[j+1]*ny+vel[j+2]*nz;
       vel[j]-=1.8*dot*nx; vel[j+1]-=1.8*dot*ny; vel[j+2]-=1.8*dot*nz;
       vel[j]*=0.6; vel[j+1]*=0.6; vel[j+2]*=0.6;
@@ -265,12 +308,12 @@ function updateParticlesPhysics(delta){
 
     if(pos[j+1]<-0.65 && Math.hypot(vel[j],vel[j+1],vel[j+2])<0.0005){
       const targetY=-0.92+(Math.random()*0.02);
-      pos[j+1]=THREE.MathUtils.lerp(pos[j+1], targetY, 0.02);
+      pos[j+1]=THREE.MathUtils.lerp(pos[j+1],targetY,0.02);
       vel[j]*=0.5; vel[j+1]*=0.5; vel[j+2]*=0.5;
     }
   }
-
   geom.getAttribute('position').needsUpdate=true;
+
   state.wobble.multiplyScalar(0.92);
   globeGroup.rotation.x+=state.globeRotationVel.x*delta;
   globeGroup.rotation.y+=state.globeRotationVel.y*delta;
@@ -279,114 +322,125 @@ function updateParticlesPhysics(delta){
 }
 
 // -----------------------------
-// Theme
+// UI & Interaction
 // -----------------------------
-function setTheme(name){
-  state.theme=name;
-  const color = (name==='snow')?0xffffff:(name==='glitter')?0xfff1c7:(name==='confetti')?0xff6b6b:(name==='sparkles')?0x9ad4ff:0xffffff;
-  particleUniforms.uThemeColor.value.setHex(color);
+let isPointerDown=false;
+let pointerStart={x:0,y:0,t:0};
+let swipeHistory=[];
 
-  const sizes=particleSystem.geometry.getAttribute('aSize').array;
-  for(let i=0;i<sizes.length;i++){
-    if(name==='snow') sizes[i]=3+Math.random()*4;
-    if(name==='glitter') sizes[i]=1+Math.random()*3;
-    if(name==='confetti') sizes[i]=2+Math.random()*6;
-    if(name==='sparkles') sizes[i]=0.8+Math.random()*2.6;
+function onPointerDown(e){
+  isPointerDown=true;
+  pointerStart.x=e.clientX||e.touches?.[0]?.clientX;
+  pointerStart.y=e.clientY||e.touches?.[0]?.clientY;
+  pointerStart.t=performance.now();
+}
+function onPointerUp(e){
+  isPointerDown=false;
+  const dx=(e.clientX||(e.changedTouches?.[0]?.clientX||pointerStart.x))-pointerStart.x;
+  const dt=performance.now()-pointerStart.t;
+  if(Math.abs(dx)<8 && dt<200) triggerBurst(1.8);
+}
+function onPointerMove(e){
+  const x=e.clientX||(e.touches?.[0]?.clientX);
+  if(x!==undefined){
+    swipeHistory.push({x:x,t:performance.now()});
+    const now=performance.now();
+    swipeHistory=swipeHistory.filter(s=>now-s.t<800);
+    if(swipeHistory.length>6){
+      let dirs=[];
+      for(let i=1;i<swipeHistory.length;i++){
+        const dx=swipeHistory[i].x-swipeHistory[i-1].x;
+        if(Math.abs(dx)>20) dirs.push(dx>0?1:-1);
+      }
+      let changes=0;
+      for(let i=1;i<dirs.length;i++) if(dirs[i]!==dirs[i-1]) changes++;
+      if(changes>=3){
+        const dir=(swipeHistory[swipeHistory.length-1].x-swipeHistory[0].x)>0?1:-1;
+        state.globeRotationVel.y+=dir*0.08;
+        swipeHistory=[];
+      }
+    }
   }
-  particleSystem.geometry.getAttribute('aSize').needsUpdate=true;
-  bloomPass.strength=(name==='glitter'||name==='sparkles')?1.4:0.9;
 }
 
-// -----------------------------
-// Burst
-// -----------------------------
 function triggerBurst(strength=1.2){
+  const geom=particleSystem.geometry;
+  const vel=state.velocities;
   for(let i=0;i<PARTICLE_COUNT;i++){
     const j=i*3;
-    state.velocities[j]+=(Math.random()-0.5)*0.02*strength;
-    state.velocities[j+1]+=(Math.random()-0.5)*0.02*strength;
-    state.velocities[j+2]+=(Math.random()-0.5)*0.02*strength;
+    vel[j]+=strength*(Math.random()-0.5);
+    vel[j+1]+=strength*(Math.random()-0.2);
+    vel[j+2]+=strength*(Math.random()-0.5);
   }
 }
 
-// -----------------------------
-// Reset
-// -----------------------------
 function resetParticles(){
   globeGroup.rotation.set(0,0,0);
-  const pos = particleSystem.geometry.getAttribute('position').array;
-  const vel = state.velocities;
-  for(let i=0;i<PARTICLE_COUNT;i++){
-    const j=i*3;
-    const r=0.7*(0.4+Math.random()*0.6)*PARTICLE_AREA_RADIUS;
-    const theta=Math.random()*Math.PI*2;
-    const phi=Math.acos(Math.random()*0.8-0.4);
-    pos[j]=r*Math.sin(phi)*Math.cos(theta);
-    pos[j+1]=r*Math.cos(phi);
-    pos[j+2]=r*Math.sin(phi)*Math.sin(theta);
-    vel[j]=vel[j+1]=vel[j+2]=0;
+  createParticles();
+}
+
+function setTheme(theme){
+  state.theme=theme;
+  let color=0xffffff;
+  switch(theme){
+    case 'snow': color=0xffffff; break;
+    case 'glitter': color=0xffd700; break;
+    case 'confetti': color=0xff3c7e; break;
+    case 'sparkles': color=0x9ad4ff; break;
   }
-  particleSystem.geometry.getAttribute('position').needsUpdate=true;
+  particleUniforms.uThemeColor.value.set(color);
 }
 
 // -----------------------------
-// Animate
+// Motion
+// -----------------------------
+function requestMotionPermission(){
+  if(typeof DeviceMotionEvent!=='undefined' && typeof DeviceMotionEvent.requestPermission==='function'){
+    DeviceMotionEvent.requestPermission().then(resp=>{
+      if(resp==='granted') setupMotionListener();
+    });
+  } else setupMotionListener();
+}
+function setupMotionListener(){
+  window.addEventListener('deviceorientation', e=>{
+    state.globeRotationVel.x+=THREE.MathUtils.degToRad(e.gamma||0)*0.002;
+    state.globeRotationVel.y+=THREE.MathUtils.degToRad(e.alpha||0)*0.002;
+    state.globeRotationVel.z+=THREE.MathUtils.degToRad(e.beta||0)*0.002;
+  });
+}
+function setupSwipeAndShake(){
+  if(window.DeviceMotionEvent){
+    window.addEventListener('devicemotion', e=>{
+      const a=e.accelerationIncludingGravity;
+      const mag=Math.hypot(a.x,a.y,a.z);
+      if(mag>1.2) triggerBurst(mag*0.3);
+    });
+  }
+}
+
+// -----------------------------
+// Animation Loop
 // -----------------------------
 function animate(){
-  requestAnimationFrame(animate);
   const delta=clock.getDelta();
   particleUniforms.uTime.value+=delta;
   updateParticlesPhysics(delta);
   composer.render();
+  requestAnimationFrame(animate);
 }
 
 // -----------------------------
 // Resize
 // -----------------------------
 function onResize(){
-  camera.aspect=stage.clientWidth/stage.clientHeight;
+  const w=stage.clientWidth, h=stage.clientHeight;
+  camera.aspect=w/h;
   camera.updateProjectionMatrix();
-  renderer.setSize(stage.clientWidth, stage.clientHeight);
-  composer.setSize(stage.clientWidth, stage.clientHeight);
+  renderer.setSize(w,h);
+  composer.setSize(w,h);
 }
 
-// -----------------------------
-// Pointer & Shake
-// -----------------------------
-let pointerDown=false;
-function onPointerDown(e){pointerDown=true; triggerBurst(1.2);}
-function onPointerUp(e){pointerDown=false;}
-function onPointerMove(e){if(pointerDown) triggerBurst(0.6);}
-
-function setupSwipeAndShake(){
-  let lastX=null, lastY=null;
-  window.addEventListener('devicemotion', e=>{
-    const g=e.accelerationIncludingGravity;
-    if(!g) return;
-    state.wobble.x+=(g.x||0)*0.001;
-    state.wobble.y+=(g.y||0)*0.001;
-    state.wobble.z+=(g.z||0)*0.001;
-  });
-  window.addEventListener('pointermove', e=>{
-    if(lastX!==null){
-      const dx=e.clientX-lastX, dy=e.clientY-lastY;
-      state.globeRotationVel.y+=dx*0.0008;
-      state.globeRotationVel.x+=dy*0.0008;
-    }
-    lastX=e.clientX; lastY=e.clientY;
-  });
-}
-
-// -----------------------------
-// Motion permission (iOS)
-// -----------------------------
-function requestMotionPermission(){
-  if(typeof DeviceMotionEvent!=='undefined' && DeviceMotionEvent.requestPermission){
-    DeviceMotionEvent.requestPermission().then(res=>{
-      if(res==='granted') alert('Motion enabled!');
-    });
-  }
-}
+init();
 </script>
 </body>
 </html>
