@@ -31,7 +31,6 @@
 </style>
 </head>
 <body>
-
 <div id="globeWrapper">
   <canvas id="globeCanvas"></canvas>
 </div>
@@ -61,19 +60,21 @@ snowImg.src = "https://ipfs.io/ipfs/bafybeigftb6innx7vd42qicjuhntoxlegfup2rpqu3f
 class SnowObject {
     constructor(img){
         this.img = img;
+        this.width = this.img.width * 0.25;
+        this.height = this.img.height * 0.25;
         this.reset();
     }
     reset(){
-        let angle = Math.random()*Math.PI*2;
-        let r = Math.random()*globeRadius*0.7;
-        this.x = W/2 + r*Math.cos(angle);
-        this.y = H/2 + r*Math.sin(angle) - globeRadius*0.3;
+        this.x = W/2;
+        this.y = H/2 - globeRadius*0.3; // start slightly above center
         this.vx = 0; this.vy = 0;
         this.settled=false;
-        this.angle = Math.random()*Math.PI*2;
+        this.angle = 0;
         this.angularVelocity = (Math.random()-0.5)*0.02;
-        this.width = this.img.width * 0.25 * (W/500);
-        this.height = this.img.height * 0.25 * (H/500);
+        // scale to current canvas size
+        let scale = 0.25*(W/500);
+        this.width = this.img.width * scale;
+        this.height = this.img.height * scale;
     }
     applyForce(fx, fy){
         this.vx += fx;
@@ -113,7 +114,6 @@ class SnowObject {
 }
 
 let snowObject;
-snowImg.onload = ()=>{ snowObject = new SnowObject(snowImg); resizeCanvas(); };
 
 // -------------------
 // Particle System
@@ -138,7 +138,6 @@ class Particle {
             this.x += this.vx; this.y += this.vy;
             this.vx *=0.98; this.vy*=0.98;
         }
-        // constrain inside globe
         let dx = this.x - W/2;
         let dy = this.y - H/2;
         let dist = Math.sqrt(dx*dx + dy*dy);
@@ -223,28 +222,25 @@ function resizeCanvas(){
     globeRadius = W/2 - 10;
 
     if(snowObject){
-        let scale = 0.25*(W/500);
-        snowObject.width = snowObject.img.width*scale;
-        snowObject.height = snowObject.img.height*scale;
-        // keep inside globe
-        let dx = snowObject.x - W/2;
-        let dy = snowObject.y - H/2;
-        let dist = Math.sqrt(dx*dx + dy*dy);
-        if(dist + Math.max(snowObject.width,snowObject.height)/2 > globeRadius){
-            let angle = Math.atan2(dy, dx);
-            snowObject.x = W/2 + Math.cos(angle)*(globeRadius - Math.max(snowObject.width,snowObject.height)/2);
-            snowObject.y = H/2 + Math.sin(angle)*(globeRadius - Math.max(snowObject.width,snowObject.height)/2);
-        }
+        snowObject.reset();
     }
     particles.forEach(p=>p.reset());
 }
 window.addEventListener('resize', resizeCanvas);
 
 // -------------------
-// Start
+// Start after images loaded
 // -------------------
-background.onload = loop;
-
+function startIfReady(){
+    if(background.complete && snowImg.complete){
+        resizeCanvas();
+        snowObject = new SnowObject(snowImg);
+        loop();
+    } else {
+        setTimeout(startIfReady,50);
+    }
+}
+startIfReady();
 </script>
 </body>
 </html>
